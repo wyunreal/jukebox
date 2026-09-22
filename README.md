@@ -1,9 +1,9 @@
 # jukebox
 
 A homemade jukebox: firmware for power control and input reading
-(potentiometers and switches) on an **Arduino Micro (ATmega32U4)**,
-plus FreeCAD 3D models of the hardware (screen, Raspberry Pi, HDD and
-electronics supports).
+(potentiometers, switches and a 4x4 button matrix) on **Arduino Micro
+(ATmega32U4)** boards, plus FreeCAD 3D models of the hardware (screen,
+Raspberry Pi, HDD and electronics supports).
 
 ## Status
 
@@ -14,6 +14,11 @@ the hardware:
 firmware/PowerAndPotsArduino/   # PlatformIO project (Arduino Micro)
 ├── src/main.cpp                # pot/switch reading and serial reporting
 ├── src/power-state-machine.hpp # relay + short/long press power switch logic
+├── platformio.ini
+└── README.md                   # detailed firmware documentation
+
+firmware/KeyboardArduino/       # PlatformIO project (Arduino Micro)
+├── src/main.cpp                # 4x4 button matrix scan and event reporting
 ├── platformio.ini
 └── README.md                   # detailed firmware documentation
 
@@ -32,9 +37,14 @@ hardware/3d-models/             # FreeCAD models, grouped by part
 - **Serial reporting** (9600 baud, only on change): volume/single/balance/
   multi second pots (with per-segment calibration tables), power tristate,
   power switch, multi push and rotary switch.
+- **Button matrix** (4x4, rows on 2-5, columns on 6-9): `DOWN`/`UP` on
+  press/release, `PRESS` vs `LONG_PRESS` (1 s threshold) on release and a
+  `PRESSED` repeat every 500 ms while held.
 
 Pin map, output format, calibration and flashing: see
-[firmware/PowerAndPotsArduino/README.md](firmware/PowerAndPotsArduino/README.md).
+[firmware/PowerAndPotsArduino/README.md](firmware/PowerAndPotsArduino/README.md);
+button matrix wiring and events: see
+[firmware/KeyboardArduino/README.md](firmware/KeyboardArduino/README.md).
 
 ## 3D models
 
