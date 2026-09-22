@@ -3,7 +3,6 @@
 #include <Arduino.h>
 
 const byte RELAY_PIN = 2;
-// modulo de relay active-low: se activa con LOW
 const byte RELAY_ON = LOW;
 const byte RELAY_OFF = HIGH;
 const unsigned long POWER_LONG_PRESS_MS = 5000;
