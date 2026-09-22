@@ -1,12 +1,14 @@
 # jukebox
 
-Firmware for the jukebox: power control and input reading (potentiometers
-and switches) on an **Arduino Micro (ATmega32U4)**, reporting state over
-USB serial at 9600 baud.
+A homemade jukebox: firmware for power control and input reading
+(potentiometers and switches) on an **Arduino Micro (ATmega32U4)**,
+plus FreeCAD 3D models of the hardware (screen, Raspberry Pi, HDD and
+electronics supports).
 
 ## Status
 
-The repository currently contains only the firmware stage:
+The repository currently contains the firmware and the 3D models of
+the hardware:
 
 ```
 firmware/PowerAndPotsArduino/   # PlatformIO project (Arduino Micro)
@@ -14,26 +16,28 @@ firmware/PowerAndPotsArduino/   # PlatformIO project (Arduino Micro)
 ├── src/power-state-machine.hpp # relay + short/long press power switch logic
 ├── platformio.ini
 └── README.md                   # detailed firmware documentation
+
+hardware/3d-models/             # FreeCAD models, grouped by part
+├── Electronic support/         # PowerAndPots controller board, box, fuse case
+├── hdd/                        # hard drive wall support
+├── Pi support/                 # Raspberry Pi support
+├── screen/                     # screen supports, cover and joints
+└── Spectrum/                   # spectrum display frame
 ```
 
-## What it does
+## Firmware
 
 - **Power relay** driven by a state machine: short press turns it on,
   long press (≥ 5 s) performs a hard off; the button acts on release.
-- **Serial reporting** only when a value changes (250 ms throttle):
-  volume/single/balance/multi second pots (with per-segment calibration
-  tables), power tristate, power switch, multi push and rotary switch.
+- **Serial reporting** (9600 baud, only on change): volume/single/balance/
+  multi second pots (with per-segment calibration tables), power tristate,
+  power switch, multi push and rotary switch.
 
 Pin map, output format, calibration and flashing: see
 [firmware/PowerAndPotsArduino/README.md](firmware/PowerAndPotsArduino/README.md).
 
-## Development
+## 3D models
 
-Requires [PlatformIO](https://platformio.org/). From
-`firmware/PowerAndPotsArduino`:
-
-```sh
-pio run                # build
-pio run -t upload      # flash
-pio device monitor     # serial monitor (9600)
-```
+FreeCAD (`.FCStd`) models, grouped by part: see
+[hardware/3d-models/README.md](hardware/3d-models/README.md).
+No STL/STEP exports are committed yet — export from FreeCAD as needed.
