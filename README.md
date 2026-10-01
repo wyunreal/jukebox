@@ -72,6 +72,17 @@ for the spectrum analyser): see
 The installer runs on the Pi (`sudo ./jukebox-audio.sh install
 --second-output usb`) or is shipped over SSH with `./deploy.sh`.
 
+## Safety notice
+
+This project drives a power relay and includes parts meant to be printed and
+assembled with electrical components, which may involve **mains voltage**.
+None of it is a certified or safety-rated design. Incorrect wiring, assembly
+or use can cause fire, electric shock or injury. Use it entirely at your own
+risk; if you are not qualified to work with mains electricity, don't — consult
+a professional.
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, plus an additional disclaimer of liability and safety notice — see
+[LICENSE](LICENSE). The project is provided "as is", with no warranty and no
+responsibility for any damage or injury arising from its use.
