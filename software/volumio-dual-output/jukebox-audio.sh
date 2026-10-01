@@ -55,6 +55,8 @@
 #   sudo ./jukebox-audio.sh install [--second-output jack|hdmi|usb|none] [--with-playback]
 #   sudo ./jukebox-audio.sh install [--analyser-trim on|off] [--analyser-freq HZ]
 #                                  [--analyser-gain dB] [--analyser-q Q]
+#   sudo ./jukebox-audio.sh install [--tone on|off] [--tone-bass HZ]
+#                                  [--tone-treble HZ] [--tone-q Q]
 #   sudo ./jukebox-audio.sh verify  [--with-playback]
 #   sudo ./jukebox-audio.sh apply      # re-assert (used by guard units)
 #   sudo ./jukebox-audio.sh status
@@ -84,6 +86,21 @@ EQ_CONTROLS_DEST="/var/lib/jukebox-audio/analyser-eq.bin"
 EQ_LIBRARY="/usr/lib/ladspa/caps.so"
 EQ_MODULE="Eq4p"
 EQ_CAPS_ID=2608
+
+# --- tone control (bass/treble via CamillaDSP) ------------------------------
+# An ALSA "cdsp" plugin in front of the split runs CamillaDSP, whose pipeline
+# holds a low-shelf and a high-shelf. Both branches (DAC and analyser) go
+# through it, so the analyser reflects the tone. The gains are rewritten by
+# jukebox-pots and applied live via SIGHUP.
+TONE_ENABLE="${JB_TONE:-on}"                       # on | off
+TONE_BASS_FREQ="${JB_TONE_BASS_FREQ:-120}"
+TONE_TREBLE_FREQ="${JB_TONE_TREBLE_FREQ:-6000}"
+TONE_SHELF_Q="${JB_TONE_Q:-0.7}"
+CAMILLA_BIN="/usr/local/bin/camilladsp"
+CDSP_PLUGIN="/usr/lib/arm-linux-gnueabihf/alsa-lib/libasound_module_pcm_cdsp.so"
+CDSP_SRC="$APPLY_DIR/cdsp"
+CAMILLA_VERSION="4.1.3"
+CAMILLA_URL="https://github.com/HEnquist/camilladsp/releases/download/v${CAMILLA_VERSION}/camilladsp-linux-armv7.tar.gz"
 
 # --- options (JB_* environment variables act as defaults)
 SECOND_OUTPUT="${JB_SECOND_OUTPUT:-jack}"   # jack | hdmi | usb | none
@@ -151,6 +168,55 @@ ensure_dsp_deps() {
 }
 
 usage() { sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; }
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Install CamillaDSP (the tone-control engine) and the ALSA "cdsp" plugin it
+# needs. Both binaries are shipped precompiled in this directory (armhf); the
+# plugin can also be rebuilt from source when a compiler and the ALSA dev
+# headers are present. Idempotent: re-running just re-installs the same files.
+install_tone_deps() {
+  [ "$TONE_ENABLE" = "on" ] || return 0
+  say "Installing tone-control engine (CamillaDSP + cdsp plugin)"
+
+  if [ -x "$SCRIPT_DIR/camilladsp" ]; then
+    install -m 0755 "$SCRIPT_DIR/camilladsp" "$CAMILLA_BIN"
+    ok "CamillaDSP installed ($("$CAMILLA_BIN" --version 2>/dev/null | head -1))"
+  elif [ ! -x "$CAMILLA_BIN" ]; then
+    warn "CamillaDSP binary not found in $SCRIPT_DIR; tone control will not work"
+    warn "fetch it from the releases page (camilladsp-linux-armv7.tar.gz)"
+  fi
+
+  install -d /var/lib/jukebox-audio
+  # The cdsp plugin (running inside MPD, as the mpd/volumio user) rewrites the
+  # active CamillaDSP config on every open, and jukebox-pots rewrites it too.
+  # Drop stale copies (they may be owned by root) and keep the directory
+  # writable for everyone: install -d does not change an existing dir's mode.
+  rm -f /var/lib/jukebox-audio/camilla-active.*.yml
+  chmod 0777 /var/lib/jukebox-audio
+
+  # The ALSA plugin: prefer the precompiled .so; rebuild if explicitly asked
+  # and a cross/native compiler plus headers are available.
+  if [ "${JB_TONE_BUILD_CDSP:-0}" = "1" ] && command -v gcc >/dev/null 2>&1 \
+     && [ -e /usr/include/alsa/pcm_external.h ]; then
+    say "Building the cdsp plugin from source"
+    if gcc -DPIC -std=gnu11 -O2 -fPIC -shared \
+         -I/usr/include -o /tmp/libasound_module_pcm_cdsp.so \
+         "$SCRIPT_DIR/cdsp/libasound_module_pcm_cdsp.c" 2>/tmp/cdsp-build.log; then
+      install -m 0755 /tmp/libasound_module_pcm_cdsp.so "$CDSP_PLUGIN"
+      rm -f /tmp/libasound_module_pcm_cdsp.so
+      ok "cdsp plugin built and installed"
+      return 0
+    fi
+    warn "cdsp build failed (see /tmp/cdsp-build.log); using the precompiled one"
+  fi
+  if [ -f "$SCRIPT_DIR/libasound_module_pcm_cdsp.so" ]; then
+    install -m 0755 "$SCRIPT_DIR/libasound_module_pcm_cdsp.so" "$CDSP_PLUGIN"
+    ok "cdsp plugin installed (precompiled)"
+  elif [ ! -e "$CDSP_PLUGIN" ]; then
+    warn "cdsp plugin missing and no precompiled copy available"
+  fi
+}
 
 detect_cards() {
   local f id
@@ -341,6 +407,87 @@ print("wrote %s (%d bytes)" % (path, length))
 PY
 }
 
+# Emit the CamillaDSP config template for the tone control. The ALSA cdsp
+# plugin substitutes $samplerate$/$format$/$channels$ at open; jukebox-audio
+# fills the sink here. The tone step lives ONLY on the DAC branch: CamillaDSP
+# captures the (already volume-controlled) DAC stream and plays it straight to
+# the DAC hardware. The two gains carry markers so jukebox-pots can rewrite
+# them and trigger a live reload (SIGHUP). With both gains at 0.0 the signal
+# is bit-for-bit unchanged (flat shelves).
+render_camilla_template() {
+  local sink="$1"
+  cat <<'EOF'
+# Managed by jukebox-audio (tone control, DAC branch only). Do not edit by hand.
+# Gains carry JUKEBOX_TONE_BASS / JUKEBOX_TONE_TREBLE markers.
+---
+devices:
+  samplerate: $samplerate$
+  chunksize: 512
+  queuelimit: 1
+  capture:
+    type: Stdin
+    channels: $channels$
+    format: $format$
+  playback:
+    type: Alsa
+    channels: 2
+    device: "SINK_PLACEHOLDER"
+    format: S32_LE
+
+filters:
+  bass:
+    type: Biquad
+    parameters:
+      type: Lowshelf
+      freq: BASS_FREQ_PLACEHOLDER
+      q: Q_PLACEHOLDER
+      gain: 0.0  # JUKEBOX_TONE_BASS
+  treble:
+    type: Biquad
+    parameters:
+      type: Highshelf
+      freq: TREBLE_FREQ_PLACEHOLDER
+      q: Q_PLACEHOLDER
+      gain: 0.0  # JUKEBOX_TONE_TREBLE
+
+pipeline:
+  - type: Filter
+    channels: [0, 1]
+    names: [bass, treble]
+EOF
+}
+
+# The tone step feeds CamillaDSP which plays to the DAC hardware directly.
+tone_sink() {
+  echo "plughw:CARD=$DAC_CARD,DEV=0"
+}
+
+# Render the tone PCM block (empty when the tone is off). It sits on the DAC
+# branch: the software volume feeds it and it feeds postVolume -> DAC.
+render_tone_pcm() {
+  local v="$1"
+  [ "$TONE_ENABLE" = "on" ] || return 0
+  cat <<EOF
+pcm.jukeboxTone {
+    type            cdsp
+    cpath           "$CAMILLA_BIN"
+    config_in       "$APPLY_DIR/cdsp/camilla.$v.yml"
+    config_out      "/var/lib/jukebox-audio/camilla-active.$v.yml"
+    channels        2
+    rates           [44100 48000 88200 96000 176400 192000 352800]
+    cargs [
+        "-e"
+        "16384"
+    ]
+}
+EOF
+}
+
+# The software volume feeds the tone step when enabled, else postVolume.
+tone_or_post() {
+  [ "$TONE_ENABLE" = "on" ] && echo jukeboxTone || echo postVolume
+}
+
 render_snippet_usb() {
   cat <<EOF
 # jukebox-audio variant: usb
@@ -384,10 +531,12 @@ pcm.jukeboxSplit {
     bindings.3.channel 1
 }
 
+$(render_tone_pcm usb)
+
 pcm.volumioSoftVol {
     type            softvol
     slave {
-        pcm         "postVolume"
+        pcm         "$(tone_or_post)"
     }
     control {
         name        "SoftMaster Playback Volume"
@@ -454,10 +603,12 @@ pcm.jukeboxSplit {
     bindings.3.channel 1
 }
 
+$(render_tone_pcm jack)
+
 pcm.volumioSoftVol {
     type            softvol
     slave {
-        pcm         "postVolume"
+        pcm         "$(tone_or_post)"
     }
     control {
         name        "SoftMaster Playback Volume"
@@ -527,10 +678,12 @@ pcm.jukeboxSplit {
     bindings.3.channel 1
 }
 
+$(render_tone_pcm hdmi)
+
 pcm.volumioSoftVol {
     type            softvol
     slave {
-        pcm         "postVolume"
+        pcm         "$(tone_or_post)"
     }
     control {
         name        "SoftMaster Playback Volume"
@@ -567,10 +720,12 @@ pcm.softvolume {
     }
 }
 
+$(render_tone_pcm daconly)
+
 pcm.volumioSoftVol {
     type            softvol
     slave {
-        pcm         "postVolume"
+        pcm         "$(tone_or_post)"
     }
     control {
         name        "SoftMaster Playback Volume"
@@ -631,12 +786,48 @@ pcm.volumioHw {
 EOF
 }
 
+# Copy the shelf gains (Lowshelf/Highshelf) from an existing CamillaDSP config
+# into a freshly rendered one. Keeps the tone setting across regenerations.
+preserve_tone_gains() {
+  local old="$1" new="$2"
+  [ -f "$old" ] || return 0
+  local bass treble
+  bass="$(awk '/type: *Lowshelf/{f=1} f&&/gain:/{print $2; exit}' "$old")"
+  treble="$(awk '/type: *Highshelf/{f=1} f&&/gain:/{print $2; exit}' "$old")"
+  [ -n "$bass" ] || return 0
+  awk -v b="$bass" -v t="$treble" '
+    /type: *Lowshelf/ { inb=1 }
+    /type: *Highshelf/ { inb=0; int_=1 }
+    inb && /gain:/ { sub(/gain: *[-0-9.]+/, "gain: " b) }
+    int_ && /gain:/ { sub(/gain: *[-0-9.]+/, "gain: " t) }
+    { print }
+  ' "$new" >"$new.preserved" && mv -f "$new.preserved" "$new"
+  return 0
+}
+
 write_canonical() {
-  mkdir -p "$APPLY_DIR"
-  local v
+  mkdir -p "$APPLY_DIR" "$APPLY_DIR/cdsp"
+  local v tmp
   for v in $VARIANTS; do
     render_snippet "$v" >"$APPLY_DIR/snippet.$v.conf"
     render_asound "$v" >"$APPLY_DIR/asound.$v.conf"
+    # CamillaDSP tone-control template for this variant. Keep the shelf gains
+    # that jukebox-pots last applied, so regenerating (guard/apply) never
+    # resets the user's tone setting.
+    tmp="$(mktemp "$APPLY_DIR/cdsp/.camilla.XXXXXX")"
+    render_camilla_template "$v" \
+      | sed -e "s|SINK_PLACEHOLDER|$(tone_sink "$v")|" \
+            -e "s|BASS_FREQ_PLACEHOLDER|$TONE_BASS_FREQ|" \
+            -e "s|TREBLE_FREQ_PLACEHOLDER|$TONE_TREBLE_FREQ|" \
+            -e "s|Q_PLACEHOLDER|$TONE_SHELF_Q|" \
+      >"$tmp"
+    if [ -f "$APPLY_DIR/cdsp/camilla.$v.yml" ]; then
+      preserve_tone_gains "$APPLY_DIR/cdsp/camilla.$v.yml" "$tmp"
+    fi
+    mv -f "$tmp" "$APPLY_DIR/cdsp/camilla.$v.yml"
+    # MPD (running as an unprivileged user) must be able to read the template
+    # and rewrite the active config.
+    chmod 0644 "$APPLY_DIR/cdsp/camilla.$v.yml"
   done
   echo "$VERSION" >"$APPLY_DIR/VERSION"
   cat >"$CONFIG_ENV" <<EOF
@@ -654,6 +845,10 @@ JB_ANALYSER_TRIM=$ANALYSER_TRIM
 JB_ANALYSER_FREQ_HZ=$ANALYSER_FREQ_HZ
 JB_ANALYSER_GAIN_DB=$ANALYSER_GAIN_DB
 JB_ANALYSER_Q=$ANALYSER_Q
+JB_TONE=$TONE_ENABLE
+JB_TONE_BASS_FREQ=$TONE_BASS_FREQ
+JB_TONE_TREBLE_FREQ=$TONE_TREBLE_FREQ
+JB_TONE_Q=$TONE_SHELF_Q
 EOF
   write_analyser_eq_controls "$EQ_CONTROLS_SRC" >/dev/null
   ok "analyser bass trim: $ANALYSER_TRIM (${ANALYSER_FREQ_HZ} Hz ${ANALYSER_GAIN_DB} dB, Q ${ANALYSER_Q})"
@@ -731,6 +926,10 @@ load_config_env() {
     ANALYSER_FREQ_HZ="${JB_ANALYSER_FREQ_HZ:-60}"
     ANALYSER_GAIN_DB="${JB_ANALYSER_GAIN_DB:--6.02}"
     ANALYSER_Q="${JB_ANALYSER_Q:-0.5}"
+    TONE_ENABLE="${JB_TONE:-on}"
+    TONE_BASS_FREQ="${JB_TONE_BASS_FREQ:-120}"
+    TONE_TREBLE_FREQ="${JB_TONE_TREBLE_FREQ:-6000}"
+    TONE_SHELF_Q="${JB_TONE_Q:-0.7}"
   fi
 }
 
@@ -946,8 +1145,10 @@ install_live_files() {
   put_file "$APPLY_DIR/snippet.$v.conf" "$SNIPPET_PATH"
   put_file "$APPLY_DIR/asound.$v.conf" /etc/asound.conf
   # The controls file must be writable by whoever opens the chain (mpd);
-  # alsaequal mmaps it read/write even for plain playback.
-  install -d -m 0755 /var/lib/jukebox-audio
+  # alsaequal mmaps it read/write even for plain playback. The directory also
+  # holds CamillaDSP's active config, which MPD's cdsp plugin rewrites on every
+  # open, so it must stay writable by non-root users too.
+  install -d -m 0777 /var/lib/jukebox-audio
   install -m 0666 "$EQ_CONTROLS_SRC" "$EQ_CONTROLS_DEST"
 }
 
@@ -1044,13 +1245,25 @@ remove_units() {
 }
 
 alsa_playback_test() {
-  local v="$1" dn hn jn un ok_dac=0 ok_second=0 pid
+  local v="$1" dn hn jn un ok_dac=0 ok_second=0 pid wav
   dn="$(card_num "$DAC_CARD")"
   jn="$(card_num "$JACK_CARD")"
   hn="$(card_num "$HDMI_CARD")"
   un="$(card_num "$USB_CARD")"
   [ -n "$dn" ] || return 1
-  aplay -q -D volumio -f S16_LE -r 44100 -c 2 -d 3 /dev/zero >/dev/null 2>&1 &
+  # The cdsp tone step needs a source that paces the stream. /dev/zero is
+  # written as fast as possible and makes the plugin report XRUN, so play a
+  # short real WAV instead.
+  wav="$(mktemp /tmp/jukebox-test.XXXXXX.wav)"
+  python3 - "$wav" <<'PY'
+import struct, sys, wave
+p = sys.argv[1]
+with wave.open(p, "wb") as w:
+    w.setnchannels(2); w.setsampwidth(2); w.setframerate(44100)
+    n = 44100 * 4
+    w.writeframes(b"".join(struct.pack("<hh", int(6000*((i % 100) - 50)/50), int(6000*((i % 100) - 50)/50)) for i in range(n)))
+PY
+  aplay -q -D volumio "$wav" >/dev/null 2>&1 &
   pid=$!
   sleep 1.5
   grep -q RUNNING /proc/asound/card${dn}/pcm0p/sub*/status 2>/dev/null && ok_dac=1
@@ -1062,6 +1275,7 @@ alsa_playback_test() {
   esac
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  rm -f "$wav"
   [ "$ok_dac" = 1 ] && [ "$ok_second" = 1 ]
 }
 
@@ -1143,6 +1357,7 @@ cmd_install() {
 
   say "Writing ALSA split configuration"
   ensure_dsp_deps
+  install_tone_deps
   write_canonical
   wanted_variant="$(variant_for_now)"
   if [ "$SECOND_OUTPUT" = "hdmi" ] && [ "$wanted_variant" = "daconly" ]; then
@@ -1239,7 +1454,7 @@ cmd_apply() {
   # Keep the analyser controls file in step with the canonical copy.
   if [ "$ANALYSER_TRIM" = "on" ] && [ -f "$EQ_CONTROLS_SRC" ]; then
     ensure_dsp_deps
-    install -d -m 0755 /var/lib/jukebox-audio
+    install -d -m 0777 /var/lib/jukebox-audio
     if ! cmp -s "$EQ_CONTROLS_SRC" "$EQ_CONTROLS_DEST" 2>/dev/null; then
       install -m 0666 "$EQ_CONTROLS_SRC" "$EQ_CONTROLS_DEST"
       log "apply: refreshed analyser controls file"
@@ -1516,6 +1731,32 @@ main() {
         ANALYSER_TRIM="$1"
         shift
         ;;
+      --no-tone) TONE_ENABLE=off; shift ;;
+      --tone=*) TONE_ENABLE="${1#*=}"; shift ;;
+      --tone)
+        shift
+        [ $# -gt 0 ] || die "--tone needs a value: on|off"
+        TONE_ENABLE="$1"
+        shift
+        ;;
+      --tone-bass=*) TONE_BASS_FREQ="${1#*=}"; shift ;;
+      --tone-bass)
+        shift
+        [ $# -gt 0 ] || die "--tone-bass needs a value in Hz"
+        TONE_BASS_FREQ="$1"; shift
+        ;;
+      --tone-treble=*) TONE_TREBLE_FREQ="${1#*=}"; shift ;;
+      --tone-treble)
+        shift
+        [ $# -gt 0 ] || die "--tone-treble needs a value in Hz"
+        TONE_TREBLE_FREQ="$1"; shift
+        ;;
+      --tone-q=*) TONE_SHELF_Q="${1#*=}"; shift ;;
+      --tone-q)
+        shift
+        [ $# -gt 0 ] || die "--tone-q needs a value"
+        TONE_SHELF_Q="$1"; shift
+        ;;
       --analyser-freq=*) ANALYSER_FREQ_HZ="${1#*=}"; shift ;;
       --analyser-gain=*) ANALYSER_GAIN_DB="${1#*=}"; shift ;;
       --analyser-q=*) ANALYSER_Q="${1#*=}"; shift ;;
@@ -1531,6 +1772,10 @@ main() {
   case "$ANALYSER_TRIM" in
     on|off) ;;
     *) die "--analyser-trim must be on|off (got: $ANALYSER_TRIM)" ;;
+  esac
+  case "$TONE_ENABLE" in
+    on|off) ;;
+    *) die "--tone must be on|off (got: $TONE_ENABLE)" ;;
   esac
   [ -n "$mode" ] || { usage; exit 1; }
   case "$mode" in

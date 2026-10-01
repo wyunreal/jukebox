@@ -131,6 +131,13 @@ main() {
     run_ssh "mkdir -p $REMOTE_DIR"
     run_scp "$LOCAL_DIR/$SCRIPT_NAME" "$HOST:$REMOTE_DIR/$SCRIPT_NAME"
     run_scp "$LOCAL_DIR/README.md" "$HOST:$REMOTE_DIR/README.md" 2>/dev/null || true
+    # Tone-control engine: CamillaDSP + the precompiled cdsp ALSA plugin.
+    [ -f "$LOCAL_DIR/camilladsp" ] && run_scp "$LOCAL_DIR/camilladsp" "$HOST:$REMOTE_DIR/camilladsp"
+    [ -f "$LOCAL_DIR/libasound_module_pcm_cdsp.so" ] && run_scp "$LOCAL_DIR/libasound_module_pcm_cdsp.so" "$HOST:$REMOTE_DIR/libasound_module_pcm_cdsp.so"
+    if [ -d "$LOCAL_DIR/cdsp" ]; then
+      run_ssh "mkdir -p $REMOTE_DIR/cdsp"
+      run_scp "$LOCAL_DIR/cdsp/"* "$HOST:$REMOTE_DIR/cdsp/" 2>/dev/null || true
+    fi
     ok "copied"
   fi
 

@@ -1,7 +1,8 @@
-# jukebox pots (volume + balance from the Arduino)
+# jukebox pots (volume + balance + tone from the Arduino)
 
-Turns the two potentiometers of the **PowerAndPotsArduino** into physical
-volume and balance controls **for the speakers (I2S DAC) only**.
+Turns four potentiometers of the **PowerAndPotsArduino** into physical
+controls **for the speakers (I2S DAC) only**: volume, balance, bass and
+treble.
 
 The Arduino prints their state on its USB serial port (9600 baud, only on
 change):
@@ -9,26 +10,37 @@ change):
 ```
 POT volume: 15 (raw 700)
 POT balance: 10 (raw 512)
+POT single: 12 (raw 640)
+POT multi second: 8 (raw 430)
 ```
 
-A small daemon reads those two lines and applies them to the DAC branch of the
+A small daemon reads those lines and applies them to the DAC branch of the
 `jukebox-audio` chain:
 
 | Pot | Range | Effect |
 | --- | --- | --- |
 | `POT volume` | 0–20 | Volumio volume, 0–100 % |
 | `POT balance` | 0–20, center 10 | pan of the DAC left/right (opposite channel attenuated) |
+| `POT single` | 0–20, center 10 | **bass** shelf, ±12 dB |
+| `POT multi second` | 0–20, center 10 | **treble** shelf, ±12 dB |
+
+Center (10) on either tone pot means **0 dB**, i.e. bit-for-bit transparent.
+The pots are not hard-wired to a function: `JP_TONE_BASS_POT` and
+`JP_TONE_TREBLE_POT` pick which firmware lines drive bass and treble
+(`single` / `multisecond` by default).
 
 The **second, constant-level output that feeds the spectrum analyser is never
-touched**: it does not carry the `SoftMaster` control at all, so nothing in
-this package can change its level.
+touched**: it does not carry the `SoftMaster` control at all, and the tone
+shelves live on the DAC branch only, so nothing in this package can change its
+level or response.
 
 ## How it works
 
 ```
 PowerAndPotsArduino --USB serial--> jukebox-pots daemon
                                       | volume  -> Volumio API (SoftMaster)
-                                      '- balance -> amixer, per-channel on SoftMaster
+                                      | balance -> amixer, per-channel on SoftMaster
+                                      '- tone    -> CamillaDSP config + SIGHUP (live)
 ```
 
 * **Volume** goes through the Volumio API (`/api/v1/commands/?cmd=volume`), so
@@ -38,6 +50,13 @@ PowerAndPotsArduino --USB serial--> jukebox-pots daemon
   Volume` (Left/Right) directly: the louder channel keeps the volume level and
   the opposite channel is attenuated, down to mute at hard pan. That control
   lives on the DAC branch only.
+* **Bass/treble** rewrite the two shelf `gain:` values in the CamillaDSP
+  config written by `jukebox-audio` (`/usr/local/jukebox-audio/cdsp/camilla.*.yml`)
+  and in the active config CamillaDSP is running, then send the process a
+  `SIGHUP`. CamillaDSP re-reads the config and rebuilds the shelves **without
+  interrupting playback**; the gain ramp is handled by CamillaDSP itself.
+  The rewrite finds the shelves by their biquad type (`Lowshelf`/`Highshelf`)
+  and preserves the file's mode/owner so MPD can keep rewriting it.
 * The daemon has **no third-party dependencies** (no `pyserial`); it opens the
   serial port with `termios` and re-scans for it when missing, so it survives
   the Arduino being unplugged/replugged. A udev rule also restarts it when a
@@ -160,6 +179,14 @@ is running. The firmware streams regardless of DTR, so plain `termios` suffices.
 | `--volume-invert` | off | reverse the volume pot direction |
 | `--balance-invert` | off | reverse left/right |
 | `--no-api` | off | write the mixer directly instead of the Volumio API |
+| `--tone` / `--no-tone` | on | enable/disable the bass+treble pots |
+| `--tone-max-db N` | 12 | shelf range at the pot extremes |
+| `--tone-center N` | 10 | pot value meaning "flat" |
+| `--tone-span N` | 10 | pot steps from center to full shelf |
+| `--tone-bass-pot NAME` | single | firmware line driving bass (`single`/`multisecond`) |
+| `--tone-treble-pot NAME` | multisecond | firmware line driving treble |
+| `--tone-bass-invert` | off | reverse the bass pot direction |
+| `--tone-treble-invert` | off | reverse the treble pot direction |
 
 The same values can be set as environment variables in
 `/usr/local/jukebox-pots/config.env` (`JP_*`), which the unit loads at start.
@@ -167,13 +194,21 @@ The same values can be set as environment variables in
 ## Notes
 
 * The firmware already scales the raw ADC reading, so the daemon consumes the
-  `POT volume` / `POT balance` values directly. If you re-calibrate the pots in
-  the firmware, the daemon needs no change.
+  `POT volume` / `POT balance` / `POT single` / `POT multi second` values
+  directly. If you re-calibrate the pots in the firmware, the daemon needs no
+  change.
 * `SoftMaster` is created by the `softvol` plugin the first time the chain is
   opened. The daemon creates it on demand (a 1-second silent `aplay`) if it is
   missing, and the standard `jukebox-audio` install materializes it too.
 * Balance is relative to the current level, so it keeps working across volume
   changes; only the two channel values of `SoftMaster` are written.
+* The tone pots only work when the `jukebox-audio` chain was installed with
+  the tone enabled (the default). Their gains are written to the CamillaDSP
+  config under `/usr/local/jukebox-audio/cdsp/` and applied live with a
+  `SIGHUP`; the template is updated too, so the setting survives a
+  regeneration by the guard and a reboot.
+* The daemon never asserts DTR (see the hardware notes above); the firmware
+  reports regardless of it, and the status request is a plain byte.
 * Uninstall removes the service, the unit, the udev rule and
   `/usr/local/jukebox-pots/`, and restores nothing else — the audio chain was
   never modified by this package.

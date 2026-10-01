@@ -54,6 +54,8 @@ credentials into files.
 | Guard units | `systemctl is-enabled jukebox-audio-guard.service jukebox-audio-guard.path` | both `enabled` |
 | Pot service | `systemctl is-active jukebox-pots` | `active` (if installed) |
 | Pot port | `ls /dev/ttyACM*` | the PowerAndPots/Keyboard Arduino (if plugged) |
+| Tone engine | `systemctl is-active jukebox-pots` + `pgrep -x camilladsp` | service active; CamillaDSP runs only while playing |
+| Tone config | `ls /usr/local/jukebox-audio/cdsp/camilla.*.yml` | one template per variant (`0644`) |
 | Tool | `sudo /usr/local/jukebox-audio/jukebox-audio.sh status` | `second output: usb`, `live variant: usb` |
 | UI boost | `sudo /usr/local/jukebox-ui/jukebox-ui.sh verify` | all `ok`, X screen `800x480` |
 | UI guard | `systemctl is-active jukebox-ui-guard.path` | `active` |
@@ -185,17 +187,22 @@ states above.
 | Arduino never shows as `ttyACM*`, `lsusb` clean, but LEDs on | 32U4 needs VBUS sense; a clone (Pro Micro) powers up without it | bridge the Pro Micro `J1`/`SJ1` jumper (VCC->UVCC/VBUS), or wire `5V`/`VCC` to the VBUS net. See `software/jukebox-pots/README.md` |
 | Restarting `jukebox-pots` cuts the jukebox power | **DTR reset**: DTR is tied to reset on the Micro (same board runs the power state machine) | the daemon must not assert DTR (it does not); do not use `cat`/tools that raise DTR |
 | Pots do nothing but `jukebox-pots` is active | board not enumerated, wrong port, or `SoftMaster` missing | `sudo /usr/local/jukebox-pots/jukebox-pots.py --probe`; `journalctl -u jukebox-pots` |
+| Tone pots do nothing | tone off (`JB_TONE`), no CamillaDSP config, or the daemon can't write it | check `ls /usr/local/jukebox-audio/cdsp/`; `journalctl -u jukebox-pots \| grep tone`; reinstall `jukebox-audio` with tone on |
+| No sound after installing the tone | CamillaDSP `chunksize` too large for the cdsp pipe (deadlock, XRUN) | keep `chunksize: 512` in the tone template; `apply`; reinstall |
+| Tone stops after reboot | CamillaDSP config regenerated without gains | the installer preserves gains; re-check `grep gain /usr/local/jukebox-audio/cdsp/camilla.*.yml` |
 | Chain refuses to open | files hand-edited and guard reverted mid-play, or device busy | `mpc stop`; `apply`; `verify --with-playback` |
 
 ## Repo map (for reference)
 
 - `software/volumio-dual-output/` — installer, deploy helper, README (the full
-  design doc: how the ALSA split works, variants, the `multi` fail-safe).
+  design doc: the ALSA split, the CamillaDSP tone step, variants, the `multi`
+  fail-safe). Ships the armv7 `camilladsp` binary and the armhf `cdsp` plugin.
 - `software/jukebox-pots/` — `jukebox-pots.service`: reads `POT volume` /
-  `POT balance` from the PowerAndPots Arduino over USB serial and drives the
-  DAC volume (Volumio API) and balance (per-channel `SoftMaster`). Install with
-  `software/jukebox-pots/deploy.sh install`; check with `... status`. It only
-  touches the DAC branch, never the analyser feed.
+  `POT balance` / `POT single` / `POT multi second` from the PowerAndPots
+  Arduino over USB serial and drives the DAC volume (Volumio API), balance
+  (per-channel `SoftMaster`) and bass/treble (CamillaDSP config + `SIGHUP`, live).
+  Install with `software/jukebox-pots/deploy.sh install`; check with `... status`.
+  It only touches the DAC branch, never the analyser feed.
 - This skill lives in `skills/jukebox/`.
 
 When the user asks for jukebox work and anything looks different from this

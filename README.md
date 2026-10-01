@@ -33,10 +33,13 @@ hardware/3d-models/             # FreeCAD models, grouped by part
 software/volumio-dual-output/   # custom dual audio output for Volumio
 ├── jukebox-audio.sh            # installer / verify / status (runs on the Pi)
 ├── deploy.sh                   # ship and run the installer over SSH
-└── README.md                   # design doc: ALSA split, variants, fail-safe
+├── camilladsp                  # CamillaDSP v4.1.3 (armv7), tone-control engine
+├── libasound_module_pcm_cdsp.so# cdsp ALSA plugin (armhf)
+├── cdsp/                       # plugin source (patched) + strrep.h
+└── README.md                   # design doc: ALSA split, tone, variants, fail-safe
 
-software/jukebox-pots/          # pot volume/balance from the PowerAndPots Arduino
-├── jukebox-pots.py             # daemon: USB serial -> DAC volume/balance
+software/jukebox-pots/          # pot volume/balance/tone from the Arduino
+├── jukebox-pots.py             # daemon: USB serial -> DAC volume/balance/tone
 ├── install.sh                  # idempotent installer (runs on the Pi)
 ├── deploy.sh                   # ship and run the installer over SSH
 └── README.md                   # design doc: mapping, detection, analyser safety
@@ -47,6 +50,23 @@ skills/jukebox/SKILL.md         # agent skill to operate and troubleshoot the bo
 The audio setup splits playback into the I2S DAC (speakers, volume-controlled
 by Volumio) and a second constant-level output feeding a hardware spectrum
 analyser, with an automatic DAC-only fallback when the second device is absent.
+The DAC branch also carries a live **bass/treble tone control** (CamillaDSP),
+driven by two of the Arduino's potentiometers.
+
+## Physical controls
+
+Four potentiometers of the PowerAndPots Arduino drive the DAC (speakers) only:
+
+| Pot | Function |
+| --- | --- |
+| `POT volume` | Volumio volume (0–100 %) |
+| `POT balance` | left/right balance of the DAC |
+| `POT single` | bass shelf (±12 dB, center = flat) |
+| `POT multi second` | treble shelf (±12 dB, center = flat) |
+
+The spectrum analyser feed keeps its constant level and is not affected by any
+of them (including the tone). See
+[software/jukebox-pots/README.md](software/jukebox-pots/README.md).
 
 ## Firmware
 

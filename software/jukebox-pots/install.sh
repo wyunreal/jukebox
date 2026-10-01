@@ -28,6 +28,14 @@
 #   --volume-invert / --no-volume-invert
 #   --balance-invert / --no-balance-invert
 #   --no-api               write the mixer directly instead of the Volumio API
+#   --tone / --no-tone     enable/disable the bass+treble pots (default: on)
+#   --tone-max-db N        shelf range at the pot extremes (default: 12)
+#   --tone-center N        pot value that means flat (default: 10)
+#   --tone-span N          pot steps from center to full shelf (default: 10)
+#   --tone-bass-pot NAME   firmware line for bass: single|multisecond
+#   --tone-treble-pot NAME firmware line for treble: single|multisecond
+#   --tone-bass-invert / --no-tone-bass-invert
+#   --tone-treble-invert / --no-tone-treble-invert
 #
 # From a development machine use deploy.sh, which copies this directory over
 # SSH and runs this script remotely.
@@ -51,6 +59,14 @@ BALANCE_SPAN="10"
 VOLUME_INVERT="0"
 BALANCE_INVERT="0"
 USE_API="1"
+TONE_ENABLE="1"
+TONE_MAX_DB="12"
+TONE_CENTER="10"
+TONE_SPAN="10"
+TONE_BASS_POT="single"
+TONE_TREBLE_POT="multisecond"
+TONE_BASS_INVERT="0"
+TONE_TREBLE_INVERT="0"
 
 # ------------------------------------------------------------------- helpers
 
@@ -94,6 +110,14 @@ JP_BALANCE_SPAN=$BALANCE_SPAN
 JP_VOLUME_INVERT=$VOLUME_INVERT
 JP_BALANCE_INVERT=$BALANCE_INVERT
 JP_USE_API=$USE_API
+JP_TONE=$TONE_ENABLE
+JP_TONE_MAX_DB=$TONE_MAX_DB
+JP_TONE_CENTER=$TONE_CENTER
+JP_TONE_SPAN=$TONE_SPAN
+JP_TONE_BASS_POT=$TONE_BASS_POT
+JP_TONE_TREBLE_POT=$TONE_TREBLE_POT
+JP_TONE_BASS_INVERT=$TONE_BASS_INVERT
+JP_TONE_TREBLE_INVERT=$TONE_TREBLE_INVERT
 EOF
 }
 
@@ -131,6 +155,10 @@ EOF
 }
 
 enable_service() {
+  # The tone control rewrites CamillaDSP's active config, so the directory
+  # must stay writable for both this service and MPD's cdsp plugin.
+  install -d -m 0777 /var/lib/jukebox-audio 2>/dev/null || true
+  chmod 0777 /var/lib/jukebox-audio 2>/dev/null || true
   systemctl enable jukebox-pots.service >/dev/null 2>&1 || true
   systemctl restart jukebox-pots.service
 }
@@ -218,10 +246,22 @@ cmd_verify() {
       ;;
   esac
 
+  if [ "${TONE_ENABLE:-1}" = "1" ]; then
+    if ls /usr/local/jukebox-audio/cdsp/camilla.*.yml >/dev/null 2>&1; then
+      ok "tone control config present (CamillaDSP shelves)"
+    else
+      warn "tone control enabled but no CamillaDSP config found (install jukebox-audio with tone on)"
+    fi
+    if [ -x /usr/local/bin/camilladsp ]; then
+      ok "CamillaDSP present"
+    else
+      warn "CamillaDSP binary missing; the tone pots will have no effect"
+    fi
+  fi
+
   if amixer -c "$DAC_CARD" sget SoftMaster >/dev/null 2>&1; then
     ok "SoftMaster volume control present on $DAC_CARD (DAC branch only)"
-  else
-    warn "SoftMaster not materialized yet (appears on first playback)"
+  else    warn "SoftMaster not materialized yet (appears on first playback)"
   fi
 
   [ "$rc" = 0 ] && say "All checks passed" || say "$rc check(s) failed"
@@ -271,6 +311,22 @@ main() {
       --balance-invert) BALANCE_INVERT=1; shift ;;
       --no-balance-invert) BALANCE_INVERT=0; shift ;;
       --no-api) USE_API=0; shift ;;
+      --tone) TONE_ENABLE=1; shift ;;
+      --no-tone) TONE_ENABLE=0; shift ;;
+      --tone-max-db) TONE_MAX_DB="$2"; shift 2 ;;
+      --tone-center) TONE_CENTER="$2"; shift 2 ;;
+      --tone-span) TONE_SPAN="$2"; shift 2 ;;
+      --tone-bass-pot) TONE_BASS_POT="$2"; shift 2 ;;
+      --tone-treble-pot) TONE_TREBLE_POT="$2"; shift 2 ;;
+      --tone-max-db=*) TONE_MAX_DB="${1#*=}"; shift ;;
+      --tone-center=*) TONE_CENTER="${1#*=}"; shift ;;
+      --tone-span=*) TONE_SPAN="${1#*=}"; shift ;;
+      --tone-bass-pot=*) TONE_BASS_POT="${1#*=}"; shift ;;
+      --tone-treble-pot=*) TONE_TREBLE_POT="${1#*=}"; shift ;;
+      --tone-bass-invert) TONE_BASS_INVERT=1; shift ;;
+      --no-tone-bass-invert) TONE_BASS_INVERT=0; shift ;;
+      --tone-treble-invert) TONE_TREBLE_INVERT=1; shift ;;
+      --no-tone-treble-invert) TONE_TREBLE_INVERT=0; shift ;;
       -h|--help) usage; exit 0 ;;
       install|verify|status|uninstall) mode="$1"; shift ;;
       *) die "unknown argument: $1" ;;
