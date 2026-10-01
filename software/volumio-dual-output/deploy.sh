@@ -17,7 +17,7 @@
 #   -h, --help          this help
 #
 # Commands (default: install):
-#   install [--with-playback]   install/update the feature
+#   install [--second-output usb|hdmi|jack|none] [--with-playback]
 #   verify  [--with-playback]   run the verification checks only
 #   apply                       re-assert configuration (used by guard units)
 #   status                      show current state
@@ -25,6 +25,7 @@
 #
 # Examples:
 #   ./deploy.sh install
+#   ./deploy.sh install --second-output usb
 #   ./deploy.sh --host volumio@volumio.local verify --with-playback
 #   ./deploy.sh uninstall
 #
@@ -82,7 +83,7 @@ run_ssh_root() {
 }
 
 main() {
-  local command="install" with_playback="" remote_cmd
+  local command="install" with_playback="" second_output=""
   local positional=()
 
   while [ $# -gt 0 ]; do
@@ -93,6 +94,9 @@ main() {
       -n|--dry-run) DRY_RUN=1; shift ;;
       -h|--help) usage; exit 0 ;;
       --with-playback) with_playback="--with-playback"; shift ;;
+      --second-output=*) second_output="$1"; shift ;;
+      --second-output)
+        second_output="$1 $2"; shift 2 ;;
       -*) die "unknown option: $1 (see --help)" ;;
       *) positional+=("$1"); shift ;;
     esac
@@ -126,6 +130,7 @@ main() {
   fi
 
   remote_cmd="$REMOTE_DIR/$SCRIPT_NAME $command"
+  [ -n "$second_output" ] && remote_cmd="$remote_cmd $second_output"
   [ -n "$with_playback" ] && remote_cmd="$remote_cmd $with_playback"
 
   if [ "$command" = "status" ]; then
