@@ -180,6 +180,20 @@ def find_port() -> str | None:
     return None
 
 
+def request_status(fd: int) -> None:
+    """Ask the firmware for a full status report.
+
+    The firmware only prints a value when it changes, so a board that was
+    already running when the Pi booted would stay silent. Any byte received
+    makes it re-emit every pot/switch once; the daemon then seeds volume and
+    balance from the current pot positions.
+    """
+    try:
+        os.write(fd, b"\n")
+    except OSError:
+        pass
+
+
 def open_serial(path: str) -> int:
     # Deliberately does NOT assert DTR: on the Arduino Micro (ATmega32U4) DTR is
     # wired to the reset line, so raising it reboots the board — which would also
@@ -382,6 +396,7 @@ def probe() -> int:
         except OSError as exc:
             print("serial open   : FAILED (%s)" % exc)
             return 1
+        request_status(fd)
         deadline = time.monotonic() + 3.0
         seen = []
         while time.monotonic() < deadline and len(seen) < 4:
@@ -451,7 +466,8 @@ def main() -> int:
                     if port:
                         try:
                             fd = open_serial(port)
-                            log("connected to %s" % port)
+                            request_status(fd)
+                            log("connected to %s (status requested)" % port)
                         except Exception as exc:
                             log("cannot open %s: %s" % (port, exc))
                             port = ""

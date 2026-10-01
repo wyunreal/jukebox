@@ -42,6 +42,14 @@ PowerAndPotsArduino --USB serial--> jukebox-pots daemon
   serial port with `termios` and re-scans for it when missing, so it survives
   the Arduino being unplugged/replugged. A udev rule also restarts it when a
   `ttyACM`/`ttyUSB` appears.
+* Right after opening the port the daemon **requests a full status report** (it
+  writes one byte; the firmware re-emits every value). This is required at boot:
+  the board is powered from 5VSB and may already be running when the Pi comes
+  up, and the firmware only reports on change, so without the request the daemon
+  would never learn the current pot positions and volume/balance would not be
+  seeded.
+* The daemon never asserts DTR (see the clone notes above); the firmware reports
+  regardless of it, and the status request is a plain byte.
 
 ## Install
 
