@@ -74,6 +74,16 @@ sudo /usr/local/jukebox-audio/jukebox-audio.sh install --second-output usb|hdmi|
 sudo /usr/local/jukebox-audio/jukebox-audio.sh uninstall  # restore the pre-install backup
 ```
 
+**Analyser bass trim.** The analyser (second) branch carries a fixed low-shelf
+filter so the spectrum analyser's hardware bass over-read is compensated. It is
+on the second branch only; the speakers are untouched. Defaults: `60 Hz,
+-6.02 dB (= half amplitude), Q 0.5`, which gives ~-6 dB below 40 Hz and flat
+above ~80 Hz. Implemented with CAPS `Eq4p` via the `alsaequal` `equal` plugin
+(auto-installed). Change with `--analyser-trim on|off`, `--analyser-freq HZ`,
+`--analyser-gain dB`, `--analyser-q Q` (or `JB_ANALYSER_*`); the value is baked
+into a deterministic `/var/lib/jukebox-audio/analyser-eq.bin`. `status` shows
+it as `analyser trim :`.
+
 - Log: `/var/log/jukebox-audio.log`; backups: `/var/backups/jukebox-audio/latest/`.
 - `jukebox-audio-guard.path` watches `/etc/asound.conf`, the Volumio ALSA
   snippet and `special_cards_config.json`: if Volumio rewrites them from its
