@@ -970,8 +970,58 @@ print("changed" if changed else "unchanged")
 PY
 }
 
-patch_special_cards() {
-  python3 - "$SPECIAL_CARDS_JSON" "$ALSA_CONFIG_JSON" <<'PY'
+# Volumio generates /etc/mpd.conf from its own template, but only while its
+# plugin is initialised. If the file is missing (fresh install, manual cleanup,
+# botched update) MPD never starts and nothing plays. Rebuild it from the
+# template with the current Volumio settings.
+ensure_mpd_conf() {
+  local tmpl="/volumio/app/plugins/music_service/mpd/mpd.conf.tmpl"
+  [ -s /etc/mpd.conf ] && return 0
+  [ -f "$tmpl" ] || { warn "no /etc/mpd.conf and no Volumio template to rebuild it"; return 1; }
+  say "Rebuilding /etc/mpd.conf from the Volumio template"
+  python3 - "$tmpl" "$ALSA_CONFIG_JSON" "$SPECIAL_CARDS_JSON" <<'PY'
+import json, sys
+tmpl, cfg_path, special_path = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def val(d, key, default=""):
+    v = (d.get(key) or {}).get("value")
+    return default if v is None else v
+
+try:
+    cfg = json.load(open(cfg_path))
+except Exception:
+    cfg = {}
+
+label = val(cfg, "outputdevicename", "R-PI DAC")
+
+special = ""
+try:
+    d = json.load(open(special_path))
+    items = d.get(label)
+    if isinstance(items, list):
+        special = "\n".join("\t\t" + str(i) for i in items)
+except Exception:
+    pass
+
+text = open(tmpl).read()
+for k, v in {
+    "${log_level}": "default",
+    "${device}": "volumio",
+    "${dop}": "no",
+    "${mixer}": 'mixer_type\t\t"none"',
+    "${format}": "",
+    "${special_settings}": special,
+}.items():
+    text = text.replace(k, v)
+
+open("/etc/mpd.conf", "w").write(text)
+print("wrote /etc/mpd.conf")
+PY
+  chmod 0666 /etc/mpd.conf 2>/dev/null || true
+  ok "wrote /etc/mpd.conf"
+}
+
+patch_special_cards() {  python3 - "$SPECIAL_CARDS_JSON" "$ALSA_CONFIG_JSON" <<'PY'
 import json, sys
 special_path, cfg_path = sys.argv[1], sys.argv[2]
 try:
@@ -1374,6 +1424,7 @@ cmd_install() {
   ok "wrote /etc/asound.conf"
 
   say "Updating Volumio configuration"
+  ensure_mpd_conf
   [ "$(patch_config_json)" = "changed" ] && ok "updated $ALSA_CONFIG_JSON" || ok "config.json already correct"
   [ "$(patch_special_cards)" = "changed" ] && ok "updated $SPECIAL_CARDS_JSON" || ok "special cards config already correct"
 
@@ -1479,6 +1530,7 @@ cmd_apply() {
     fixed_s=1
     log "apply: live variant $live -> $desired (files written)"
   fi
+  ensure_mpd_conf
   out="$(patch_special_cards)"
   [ "$out" = "changed" ] && { fixed_x=1; log "apply: fixed special_cards_config.json"; }
   out="$(patch_config_json)"
