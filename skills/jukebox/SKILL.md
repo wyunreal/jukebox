@@ -53,6 +53,8 @@ credentials into files.
 | Volume control | `amixer -c sndrpirpidac sget SoftMaster` | readable 0–99 control |
 | Guard units | `systemctl is-enabled jukebox-audio-guard.service jukebox-audio-guard.path` | both `enabled` |
 | Tool | `sudo /usr/local/jukebox-audio/jukebox-audio.sh status` | `second output: usb`, `live variant: usb` |
+| UI boost | `sudo /usr/local/jukebox-ui/jukebox-ui.sh verify` | all `ok`, X screen `800x480` |
+| UI guard | `systemctl is-active jukebox-ui-guard.path` | `active` |
 
 If the USB card is unplugged, the chain automatically falls back to
 `daconly` (speakers keep playing); plug it back and the udev rule re-activates
@@ -81,6 +83,29 @@ sudo /usr/local/jukebox-audio/jukebox-audio.sh uninstall  # restore the pre-inst
   while experimenting).
 - From a dev machine: `software/volumio-dual-output/deploy.sh install
   --second-output usb` copies the installer over SSH and runs it remotely.
+
+## The jukebox-ui tool (touch screen speed)
+
+The touch UI was sluggish/scrolling badly because Chromium was forced into
+software compositing, the `now_playing` UI used very heavy CSS blurs, and a
+phantom HDMI output forced the X screen to 848px over an 800px panel. Fixed by
+`software/volumio-ui-boost/` (canonical copies in `/usr/local/jukebox-ui/`).
+
+```sh
+sudo /usr/local/jukebox-ui/jukebox-ui.sh status   # overview + X screen
+sudo /usr/local/jukebox-ui/jukebox-ui.sh verify    # pass/fail checks
+sudo /usr/local/jukebox-ui/jukebox-ui.sh apply     # re-assert (used by guard)
+```
+
+- Log: `/var/log/jukebox-ui.log`.
+- `jukebox-ui-guard.path` watches `/opt/volumiokiosk.sh` and
+  `/etc/chromium.d/00-rpi-vars`; saving a setting on the Touch Display page
+  regenerates the kiosk script, and the guard re-applies the fixes. Same
+  trap as the audio guard: edit canonical copies + `apply`, don't hand-edit.
+- After updating the `now_playing` plugin, its CSS is replaced: run
+  `apply` manually once.
+- The HDMI-off hook turns the phantom output off inside the X session; do
+  **not** enable HDMI audio (see golden rules).
 
 ## Common tasks
 

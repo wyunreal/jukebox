@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch Volumio touch UI files (re-apply UI boost after Volumio rewrites them)
+
+[Path]
+PathChanged=/opt/volumiokiosk.sh
+PathChanged=/etc/chromium.d/00-rpi-vars
+
+[Install]
+WantedBy=multi-user.target
