@@ -52,6 +52,8 @@ credentials into files.
 | Live variant | `grep variant /etc/asound.conf` | `# jukebox-audio variant: usb` |
 | Volume control | `amixer -c sndrpirpidac sget SoftMaster` | readable 0–99 control |
 | Guard units | `systemctl is-enabled jukebox-audio-guard.service jukebox-audio-guard.path` | both `enabled` |
+| Pot service | `systemctl is-active jukebox-pots` | `active` (if installed) |
+| Pot port | `ls /dev/ttyACM*` | the PowerAndPots/Keyboard Arduino (if plugged) |
 | Tool | `sudo /usr/local/jukebox-audio/jukebox-audio.sh status` | `second output: usb`, `live variant: usb` |
 | UI boost | `sudo /usr/local/jukebox-ui/jukebox-ui.sh verify` | all `ok`, X screen `800x480` |
 | UI guard | `systemctl is-active jukebox-ui-guard.path` | `active` |
@@ -180,12 +182,20 @@ states above.
 | Volumio volume slider does nothing | `SoftMaster` element lost | `systemctl restart alsa-restore`; `apply` |
 | Volume affects the analyser too | wrong variant / mixer binding | `verify`, then `install --second-output usb` |
 | Touch screen dead | something enabled HDMI audio/DRM output | check `/boot/userconfig.txt` and the touch_display plugin config; reboot; re-run `install --second-output usb` if the HDMI variant sneaked in |
+| Arduino never shows as `ttyACM*`, `lsusb` clean, but LEDs on | 32U4 needs VBUS sense; a clone (Pro Micro) powers up without it | bridge the Pro Micro `J1`/`SJ1` jumper (VCC->UVCC/VBUS), or wire `5V`/`VCC` to the VBUS net. See `software/jukebox-pots/README.md` |
+| Restarting `jukebox-pots` cuts the jukebox power | **DTR reset**: DTR is tied to reset on the Micro (same board runs the power state machine) | the daemon must not assert DTR (it does not); do not use `cat`/tools that raise DTR |
+| Pots do nothing but `jukebox-pots` is active | board not enumerated, wrong port, or `SoftMaster` missing | `sudo /usr/local/jukebox-pots/jukebox-pots.py --probe`; `journalctl -u jukebox-pots` |
 | Chain refuses to open | files hand-edited and guard reverted mid-play, or device busy | `mpc stop`; `apply`; `verify --with-playback` |
 
 ## Repo map (for reference)
 
 - `software/volumio-dual-output/` — installer, deploy helper, README (the full
   design doc: how the ALSA split works, variants, the `multi` fail-safe).
+- `software/jukebox-pots/` — `jukebox-pots.service`: reads `POT volume` /
+  `POT balance` from the PowerAndPots Arduino over USB serial and drives the
+  DAC volume (Volumio API) and balance (per-channel `SoftMaster`). Install with
+  `software/jukebox-pots/deploy.sh install`; check with `... status`. It only
+  touches the DAC branch, never the analyser feed.
 - This skill lives in `skills/jukebox/`.
 
 When the user asks for jukebox work and anything looks different from this

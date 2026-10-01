@@ -35,6 +35,12 @@ software/volumio-dual-output/   # custom dual audio output for Volumio
 ├── deploy.sh                   # ship and run the installer over SSH
 └── README.md                   # design doc: ALSA split, variants, fail-safe
 
+software/jukebox-pots/          # pot volume/balance from the PowerAndPots Arduino
+├── jukebox-pots.py             # daemon: USB serial -> DAC volume/balance
+├── install.sh                  # idempotent installer (runs on the Pi)
+├── deploy.sh                   # ship and run the installer over SSH
+└── README.md                   # design doc: mapping, detection, analyser safety
+
 skills/jukebox/SKILL.md         # agent skill to operate and troubleshoot the box
 ```
 
@@ -71,6 +77,12 @@ for the spectrum analyser): see
 [software/volumio-dual-output/README.md](software/volumio-dual-output/README.md).
 The installer runs on the Pi (`sudo ./jukebox-audio.sh install
 --second-output usb`) or is shipped over SSH with `./deploy.sh`.
+
+Physical volume and balance from the PowerAndPots Arduino's potentiometers are
+handled by `software/jukebox-pots/` (`jukebox-pots.service`): it reads `POT
+volume` / `POT balance` over USB serial and drives the DAC volume and balance,
+leaving the analyser output untouched. Install with `software/jukebox-pots/deploy.sh
+install`; see its [README](software/jukebox-pots/README.md).
 
 ## Safety notice
 
