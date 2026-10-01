@@ -1,14 +1,15 @@
 # jukebox
 
-A homemade jukebox: firmware for power control and input reading
+A homemade jukebox built around a **Raspberry Pi 4B** running
+[Volumio](https://volumio.com/): firmware for power control and input reading
 (potentiometers, switches and a 4x4 button matrix) on **Arduino Micro
-(ATmega32U4)** boards, plus FreeCAD 3D models of the hardware (screen,
-Raspberry Pi, HDD and electronics supports).
+(ATmega32U4)** boards, FreeCAD 3D models of the hardware (screen, Raspberry Pi,
+HDD and electronics supports), the audio software that gives the Pi a custom
+dual output, and the operations skill used to run and troubleshoot the box.
 
 ## Status
 
-The repository currently contains the firmware and the 3D models of
-the hardware:
+The repository currently contains:
 
 ```
 firmware/PowerAndPotsArduino/   # PlatformIO project (Arduino Micro)
@@ -28,7 +29,18 @@ hardware/3d-models/             # FreeCAD models, grouped by part
 ├── Pi support/                 # Raspberry Pi support
 ├── screen/                     # screen supports, cover and joints
 └── Spectrum/                   # spectrum display frame
+
+software/volumio-dual-output/   # custom dual audio output for Volumio
+├── jukebox-audio.sh            # installer / verify / status (runs on the Pi)
+├── deploy.sh                   # ship and run the installer over SSH
+└── README.md                   # design doc: ALSA split, variants, fail-safe
+
+skills/jukebox/SKILL.md         # agent skill to operate and troubleshoot the box
 ```
+
+The audio setup splits playback into the I2S DAC (speakers, volume-controlled
+by Volumio) and a second constant-level output feeding a hardware spectrum
+analyser, with an automatic DAC-only fallback when the second device is absent.
 
 ## Firmware
 
@@ -51,3 +63,15 @@ button matrix wiring and events: see
 FreeCAD (`.FCStd`) models, grouped by part: see
 [hardware/3d-models/README.md](hardware/3d-models/README.md).
 No STL/STEP exports are committed yet — export from FreeCAD as needed.
+
+## Audio software
+
+Custom dual audio output for Volumio (I2S DAC + constant-level second output
+for the spectrum analyser): see
+[software/volumio-dual-output/README.md](software/volumio-dual-output/README.md).
+The installer runs on the Pi (`sudo ./jukebox-audio.sh install
+--second-output usb`) or is shipped over SSH with `./deploy.sh`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
