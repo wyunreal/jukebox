@@ -11,7 +11,7 @@
 #
 # Options:
 #   -H, --host HOST     SSH host (default: volumio@<host>)
-#   -p, --password PASS SSH/sudo password (default: $JUKEBOX_PASSWORD or prompt)
+#   -p, --password PASS SSH/sudo password (default: $JUKEBOX_PASSWORD, or prompt)
 #   -i, --identity FILE SSH private key
 #   -n, --dry-run       show what would be done, do not change anything
 #   -h, --help          this help
@@ -70,15 +70,21 @@ run_scp() {
   fi
 }
 
-# Run a command on the host with root privileges. Volumio's image uses the
-# host password for sudo (from --password or JUKEBOX_PASSWORD); it is piped to sudo -S over stdin.
+# Run a command on the host with root privileges.
+# With a password: piped to sudo -S over stdin.
+# Without one: sudo is expected to be passwordless (-n) or SSH keys are used.
 run_ssh_root() {
   local cmd="$1"
-  if [ "$have_sshpass" = 1 ] && [ -n "$SSH_PASS" ]; then
-    SSHPASS="$SSH_PASS" sshpass -e ssh "${SSH_OPTS[@]}" "$HOST" \
-      "printf '%s\n' '$SSH_PASS' | sudo -S -p '' bash -c $(printf '%q' "$cmd")"
+  if [ -n "$SSH_PASS" ]; then
+    if [ "$have_sshpass" = 1 ]; then
+      SSHPASS="$SSH_PASS" sshpass -e ssh "${SSH_OPTS[@]}" "$HOST" \
+        "printf '%s\n' '$SSH_PASS' | sudo -S -p '' bash -c $(printf '%q' "$cmd")"
+    else
+      run_ssh "printf '%s\n' '$SSH_PASS' | sudo -S -p '' bash -c $(printf '%q' "$cmd")"
+    fi
   else
-    run_ssh "printf '%s\n' '$SSH_PASS' | sudo -S -p '' bash -c $(printf '%q' "$cmd")"
+    run_ssh "sudo -n bash -c $(printf '%q' "$cmd")" \
+      || die "sudo on the host needs a password: pass --password, set JUKEBOX_PASSWORD, or enable passwordless sudo"
   fi
 }
 
@@ -113,7 +119,6 @@ main() {
   if [ "$have_sshpass" = 0 ] && [ -n "$SSH_PASS" ]; then
     echo "note: sshpass not found; will use SSH keys/agent for the connection" >&2
   fi
-
   say "Target: $HOST"
   say "Checking SSH connectivity"
   run_ssh "echo connected as \$(whoami)@\$(hostname); uname -sr" || die "cannot reach $HOST over SSH"
