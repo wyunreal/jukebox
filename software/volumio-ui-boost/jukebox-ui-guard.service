@@ -1,0 +1,12 @@
+[Unit]
+Description=Jukebox UI boost (keep touch UI fast and DSI panel native)
+Wants=volumio-kiosk.service
+After=volumio-kiosk.service graphical.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=120
+ExecStart=/usr/local/jukebox-ui/jukebox-ui.sh apply
+
+[Install]
+WantedBy=multi-user.target
