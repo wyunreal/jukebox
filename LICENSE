@@ -38,14 +38,18 @@ the following, to the maximum extent permitted by applicable law:
    responsible for evaluating, testing and deciding whether to use it.
 
 2. PHYSICAL AND ELECTRICAL HAZARDS. The Material includes firmware that drives
-   a power relay, and 3D models intended to be printed and assembled with
-   electrical and electronic components, which may involve mains voltage,
-   high currents, heat, moving parts or other hazards. Incorrect wiring,
-   assembly, printing or use can cause fire, electric shock, burns, property
-   damage, personal injury or death. No part of the Material is a certified,
-   tested or safety-rated design. Do not use it where failure could cause
-   injury, death or significant damage. If you are not qualified to work with
-   mains electricity, do not attempt it; consult a licensed professional.
+   a power relay and 3D models intended to be printed and assembled with
+   electrical and electronic components. In the reference build the relay
+   switches a PC ATX power supply (low-voltage relay contacts), but such a
+   supply still connects to mains at its input and carries high currents,
+   heat and stored energy, and other uses of the Material may involve mains
+   voltage, high currents, heat, moving parts or other hazards. Incorrect
+   wiring, assembly, printing or use can cause fire, electric shock, burns,
+   property damage, personal injury or death. No part of the Material is a
+   certified, tested or safety-rated design. Do not use it where failure could
+   cause injury, death or significant damage. If you are not qualified to work
+   with electronics or mains electricity, do not attempt it; consult a
+   licensed professional.
 
 3. NO RESPONSIBILITY FOR DAMAGES. To the maximum extent permitted by law, the
    author(s) and copyright holder(s) shall NOT be liable for any direct,

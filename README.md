@@ -74,12 +74,15 @@ The installer runs on the Pi (`sudo ./jukebox-audio.sh install
 
 ## Safety notice
 
-This project drives a power relay and includes parts meant to be printed and
-assembled with electrical components, which may involve **mains voltage**.
-None of it is a certified or safety-rated design. Incorrect wiring, assembly
-or use can cause fire, electric shock or injury. Use it entirely at your own
-risk; if you are not qualified to work with mains electricity, don't — consult
-a professional.
+This project drives a power relay (low-voltage control side) and includes
+parts meant to be printed and assembled with electronic and electrical
+components. In this build the relay switches a PC **ATX power supply**, so the
+relay contacts are low voltage — but the PSU still has mains at its input, and
+an ATX supply carries high currents and stored energy. Handle it with the usual
+care for electrical work; a supply can still get hot or hold a charge. None of
+it is a certified or safety-rated design. Use it entirely at your own risk;
+if you are not comfortable working with electronics or mains wiring, don't —
+consult a professional.
 
 ## License
 
