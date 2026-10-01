@@ -23,6 +23,12 @@ Output over USB at 9600 baud. Values are only reported when they change,
 at most every 250 ms (`REPORT_INTERVAL_MS`). A `-----` separator is printed
 whenever anything is reported.
 
+**Status request.** Send any byte on the serial port and the firmware re-emits
+every value once, even if none changed. The host uses this right after opening
+the port (`jukebox-pots` writes a newline) so it can seed the volume and balance
+from the current pot positions — needed because the board may already be running
+(powered from 5VSB) when the Pi boots and would otherwise stay silent.
+
 ```
 POT volume: 15 (raw 700)
 POT single: 20 (raw 1020)
