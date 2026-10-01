@@ -75,7 +75,7 @@ queue briefly (at low volume) to check the real playback path.
 ```
 volumio -> softvolume -> jukeboxRoute -> jukeboxSplit (multi)
     |- volumioSoftVol (softvol, SoftMaster) -> postVolume -> volumioOutput -> volumioHw   (I2S DAC)
-    '- jukeboxUsb | jukeboxHdmi | jukeboxJack                                             (fixed level)
+    '- jukeboxEq (analyser bass trim) -> jukeboxUsb | jukeboxHdmi | jukeboxJack            (fixed level)
 ```
 
 * The software volume (`SoftMaster`) sits **after** the split, on the DAC
@@ -85,6 +85,34 @@ volumio -> softvolume -> jukeboxRoute -> jukeboxSplit (multi)
 * Volumio's ALSA config generator produces `/etc/asound.conf` from plugin
   contributions. The contribution file is replaced in place, so a normal
   regeneration yields the same split chain instead of flattening it.
+
+### Analyser bass trim
+
+Spectrum analysers commonly over-read the deep bass because of their hardware,
+so the **analyser branch only** can be trimmed with a fixed low-shelf filter.
+It is off the speaker path entirely.
+
+* Implemented with the CAPS `Eq4p` LADSPA plugin through the `alsaequal`
+  `equal` ALSA plugin (`caps` + `libasound2-plugin-equal`, installed
+  automatically).
+* Bands `b`/`c`/`d` are disabled; band `a` is a low shelf at the corner
+  frequency. `50 %` amplitude is **-6.02 dB**.
+* Defaults: **60 Hz, -6.02 dB, Q 0.5**. Measured response on the live chain:
+
+  | Hz | 20 | 30 | 40 | 50 | 60 | 80 | 100+ |
+  |----|----|----|----|----|----|----|------|
+  | dB | -6.3 | -6.4 | -6.1 | -4.8 | -3.0 | -0.5 | ~0 |
+
+* The parameters are baked into a **deterministic controls file**
+  (`/usr/local/jukebox-audio/analyser-eq.bin`, copied to
+  `/var/lib/jukebox-audio/analyser-eq.bin`), so the filter is byte-identical
+  on every install.
+* Options: `--analyser-trim on|off` (`--no-analyser-trim`), `--analyser-freq HZ`,
+  `--analyser-gain dB`, `--analyser-q Q`; or the matching `JB_ANALYSER_*`
+  environment variables.
+* The wrapper `plug` must pin `rate` + `FLOAT_LE` around `equal` (it only
+  accepts float); without that the ALSA `multi` plugin fails to negotiate and
+  the whole chain refuses to open.
 
 ### Fail-safe
 
@@ -108,6 +136,9 @@ live one is selected automatically. `JB_USB_OVERRIDE=on|off` (or
   `JB_HDMI_CARD=`, `JB_USB_CARD=`.
 * USB/HDMI sample rate is `48000` by default (`JB_USB_RATE` / `JB_HDMI_RATE`).
 * Jack reference level is `0 dB` (`JB_JACK_LEVEL` / `JB_JACK_LEVEL_RAW`).
+* Analyser bass trim defaults to `on` at `60 Hz / -6.02 dB / Q 0.5`
+  (`JB_ANALYSER_TRIM`, `JB_ANALYSER_FREQ_HZ`, `JB_ANALYSER_GAIN_DB`,
+  `JB_ANALYSER_Q`). Set `--no-analyser-trim` for a transparent second branch.
 * The `multi` chain needs `buffer_time`/`period_time` in MPD (installed via
   Volumio's `special_cards_config.json`); without them MPD may refuse to
   open the chain.

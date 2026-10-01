@@ -19,14 +19,29 @@
 #
 #   volumio -> softvolume -> jukeboxRoute -> jukeboxSplit (multi)
 #       |- volumioSoftVol (softvol, SoftMaster) -> postVolume -> volumioOutput -> volumioHw (I2S DAC)
-#       '- second branch: jukeboxJack (3.5 mm jack) or jukeboxHdmi (HDMI)
+#       '- second branch: jukeboxEq (analyser low-shelf filter) -> jukeboxJack/Hdmi/Usb
 #
 # * The software volume control lives on the I2S DAC branch only, so the
 #   Volumio UI / API volume affects the DAC alone.
 # * The second branch has no volume control; for the jack its hardware mixer
 #   is kept at full level, for HDMI the level is inherently constant.
+# * The second branch carries an optional fixed low-shelf filter for the
+#   spectrum analyser (spectrum analyser bars tend to over-read the deep bass).
+#   See "ANALYSER BASS TRIM" below.
 # * MPD is told (via its "device special settings") to use no mixer, so MPD
 #   volume commands cannot touch the second output.
+#
+# ANALYSER BASS TRIM
+# ------------------
+# The analyser branch can be trimmed with a fixed low-shelf (CAPS Eq4p via the
+# alsaequal 'equal' ALSA plugin). Parameters (JB_ANALYSER_*):
+#   JB_ANALYSER_TRIM     on|off        (default on)
+#   JB_ANALYSER_FREQ_HZ  shelf corner  (default 60)
+#   JB_ANALYSER_GAIN_DB  shelf gain    (default -6.02 == "half" the level)
+#   JB_ANALYSER_Q        shelf Q       (default 0.5)
+# "50% amplitude" is -6.02 dB. The trim is baked into a deterministic controls
+# file, so it is identical on every install. The filter is applied to the
+# ANALYSER BRANCH ONLY; the DAC (speakers) path is untouched.
 #
 # HDMI fail-safe: the ALSA 'multi' plugin fails entirely if one branch cannot
 # open, so when the HDMI extractor is absent (no EDID) the chain is
@@ -37,7 +52,9 @@
 # configuration in place if Volumio rewrites it from its UI.
 #
 # Usage (on the Volumio host, as root):
-#   sudo ./jukebox-audio.sh install [--second-output jack|hdmi|none] [--with-playback]
+#   sudo ./jukebox-audio.sh install [--second-output jack|hdmi|usb|none] [--with-playback]
+#   sudo ./jukebox-audio.sh install [--analyser-trim on|off] [--analyser-freq HZ]
+#                                  [--analyser-gain dB] [--analyser-q Q]
 #   sudo ./jukebox-audio.sh verify  [--with-playback]
 #   sudo ./jukebox-audio.sh apply      # re-assert (used by guard units)
 #   sudo ./jukebox-audio.sh status
@@ -48,7 +65,7 @@
 #
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 APPLY_DIR="/usr/local/jukebox-audio"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -61,6 +78,12 @@ BACKUP_ROOT="/var/backups/jukebox-audio"
 RESTART_STAMP="/run/jukebox-audio-volumio-restart"
 VOLUMIO_RESTART_MIN_INTERVAL=300
 UDEV_RULE="/etc/udev/rules.d/89-jukebox-audio.rules"
+# alsaequal + CAPS LADSPA plugin power the analyser low-shelf filter.
+EQ_CONTROLS_SRC="$APPLY_DIR/analyser-eq.bin"
+EQ_CONTROLS_DEST="/var/lib/jukebox-audio/analyser-eq.bin"
+EQ_LIBRARY="/usr/lib/ladspa/caps.so"
+EQ_MODULE="Eq4p"
+EQ_CAPS_ID=2608
 
 # --- options (JB_* environment variables act as defaults)
 SECOND_OUTPUT="${JB_SECOND_OUTPUT:-jack}"   # jack | hdmi | usb | none
@@ -72,6 +95,11 @@ USB_CARD="${JB_USB_CARD:-}"
 USB_RATE="${JB_USB_RATE:-48000}"
 JACK_LEVEL="${JB_JACK_LEVEL:-0dB}"          # 0.00 dB == full clean level
 JACK_LEVEL_RAW="${JB_JACK_LEVEL_RAW:-0}"
+# Analyser branch bass trim (see ANALYSER BASS TRIM above).
+ANALYSER_TRIM="${JB_ANALYSER_TRIM:-on}"       # on | off
+ANALYSER_FREQ_HZ="${JB_ANALYSER_FREQ_HZ:-60}" # low-shelf corner frequency
+ANALYSER_GAIN_DB="${JB_ANALYSER_GAIN_DB:--6.02}" # -6.02 dB == half amplitude
+ANALYSER_Q="${JB_ANALYSER_Q:-0.5}"
 # JB_HDMI_OVERRIDE=on|off / JB_USB_OVERRIDE=on|off force availability (testing)
 PLAY_TEST=0
 BOOT_APPLY=0
@@ -89,7 +117,40 @@ die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 require_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 $*"; }
 
-usage() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
+# The analyser low-shelf needs the alsaequal PCM plugin (libasound2-plugin-equal)
+# and the CAPS LADSPA library (caps). Both are free Debian/Raspbian packages.
+# apt on a Volumio box is often left half-configured, so fall back to fetching
+# the .debs and installing them with dpkg.
+dsp_deps_present() {
+  [ -e /usr/lib/arm-linux-gnueabihf/alsa-lib/libasound_module_pcm_equal.so ] \
+    && [ -e "$EQ_LIBRARY" ]
+}
+
+ensure_dsp_deps() {
+  [ "$ANALYSER_TRIM" = "on" ] || return 0
+  dsp_deps_present && return 0
+  say "Installing DSP dependencies (alsaequal + CAPS LADSPA)"
+  if apt-get install -y --no-install-recommends caps libasound2-plugin-equal >/dev/null 2>&1 \
+     && dsp_deps_present; then
+    ok "installed via apt"
+    return 0
+  fi
+  warn "apt install failed; fetching .debs directly"
+  local tmp
+  tmp="$(mktemp -d /tmp/jukebox-eq.XXXXXX)"
+  ( cd "$tmp" && apt-get download caps libasound2-plugin-equal >/dev/null 2>&1 ) || true
+  if ls "$tmp"/*.deb >/dev/null 2>&1; then
+    dpkg -i "$tmp"/*.deb >/dev/null 2>&1 || true
+  fi
+  rm -rf "$tmp"
+  if dsp_deps_present; then
+    ok "installed from downloaded .debs"
+  else
+    die "could not install alsaequal/CAPS; install 'caps' and 'libasound2-plugin-equal' and retry"
+  fi
+}
+
+usage() { sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; }
 
 detect_cards() {
   local f id
@@ -206,6 +267,80 @@ live_variant() {
 
 # ------------------------------------------------------------------ renderers
 
+# Emit the analyser-branch filter block. With the trim on, a CAPS Eq4p
+# low-shelf (via alsaequal) attenuates the deep bass for the analyser only;
+# with it off, a plain plug keeps the branch transparent.
+render_analyser_eq() {
+  local target="$1" rate="$2"
+  if [ "$ANALYSER_TRIM" = "on" ]; then
+    cat <<EOF
+# Analyser bass trim: low-shelf ${ANALYSER_FREQ_HZ} Hz ${ANALYSER_GAIN_DB} dB (Q ${ANALYSER_Q}).
+# Fixed via a deterministic controls file; affects this branch only.
+# The wrapper plug pins rate + FLOAT for the 'equal' plugin (which only
+# accepts float); without that the ALSA 'multi' plugin fails to negotiate.
+pcm.jukeboxEq {
+    type            plug
+    slave {
+        pcm         "jukeboxEqDsp"
+        rate        ${rate:-48000}
+        format      FLOAT_LE
+    }
+}
+
+pcm.jukeboxEqDsp {
+    type            equal
+    slave.pcm       "$target"
+    controls        "$EQ_CONTROLS_DEST"
+    library         "$EQ_LIBRARY"
+    module          "$EQ_MODULE"
+    channels        2
+}
+EOF
+  else
+    cat <<EOF
+# Analyser bass trim disabled: transparent pass-through.
+pcm.jukeboxEq {
+    type            plug
+    slave.pcm       "$target"
+}
+EOF
+  fi
+}
+
+# Deterministic alsaequal controls file for CAPS Eq4p: band a = low shelf at
+# ANALYSER_FREQ_HZ / ANALYSER_GAIN_DB / ANALYSER_Q, bands b/c/d off.
+# Layout (alsaequal LADSPA_Control): 6xuint32 header, then one 72-byte record
+# per control port {int32 index; float data[16]; int32 type}, then a trailing
+# float[16] per port. Kept byte-stable so the file is identical every install.
+write_analyser_eq_controls() {
+  python3 - "$1" "$ANALYSER_FREQ_HZ" "$ANALYSER_GAIN_DB" "$ANALYSER_Q" "$EQ_CAPS_ID" <<'PY'
+import struct, sys
+path, f, gain, q, uid = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4]), int(sys.argv[5])
+channels = 2
+spec = [(0, 0.0, 0), (1, f, 0), (2, q, 0), (3, gain, 0),          # a: low shelf
+        (4, -1.0, 0), (5, 529.161, 0), (6, 0.5, 0), (7, 0.0, 0),  # b: off
+        (8, -1.0, 0), (9, 529.161, 0), (10, 0.25, 0), (11, 0.0, 0),  # c: off
+        (12, -1.0, 0), (13, 2721.776, 0), (14, 0.25, 0), (15, 0.0, 0),  # d: off
+        (16, 3.0, 1)]                                             # _latency (out)
+body = bytearray()
+for idx, val, typ in spec:
+    rec = bytearray(72)
+    struct.pack_into('<i', rec, 0, idx)
+    for c in range(channels):
+        struct.pack_into('<f', rec, 4 + c * 4, val)
+    struct.pack_into('<i', rec, 68, typ)
+    body += rec
+tail = bytearray()
+for idx, val, typ in spec:
+    for c in range(channels):
+        tail += struct.pack('<f', val)
+length = 24 + len(body) + len(tail)
+hdr = struct.pack('<6I', length, uid, channels, len(spec), 17, 18)
+open(path, 'wb').write(hdr + bytes(body) + bytes(tail))
+print("wrote %s (%d bytes)" % (path, length))
+PY
+}
+
 render_snippet_usb() {
   cat <<EOF
 # jukebox-audio variant: usb
@@ -237,7 +372,7 @@ pcm.jukeboxSplit {
     type            multi
     slaves.a.pcm    "volumioSoftVol"
     slaves.a.channels 2
-    slaves.b.pcm    "jukeboxUsb"
+    slaves.b.pcm    "jukeboxEq"
     slaves.b.channels 2
     bindings.0.slave   a
     bindings.0.channel 0
@@ -263,6 +398,8 @@ pcm.volumioSoftVol {
     min_dB -50.0
     resolution 100
 }
+
+$(render_analyser_eq "jukeboxUsb" "$USB_RATE")
 
 pcm.jukeboxUsb {
     type            plug
@@ -305,7 +442,7 @@ pcm.jukeboxSplit {
     type            multi
     slaves.a.pcm    "volumioSoftVol"
     slaves.a.channels 2
-    slaves.b.pcm    "jukeboxJack"
+    slaves.b.pcm    "jukeboxEq"
     slaves.b.channels 2
     bindings.0.slave   a
     bindings.0.channel 0
@@ -331,6 +468,8 @@ pcm.volumioSoftVol {
     min_dB -50.0
     resolution 100
 }
+
+$(render_analyser_eq "jukeboxJack" "48000")
 
 pcm.jukeboxJack {
     type            plug
@@ -376,7 +515,7 @@ pcm.jukeboxSplit {
     type            multi
     slaves.a.pcm    "volumioSoftVol"
     slaves.a.channels 2
-    slaves.b.pcm    "jukeboxHdmi"
+    slaves.b.pcm    "jukeboxEq"
     slaves.b.channels 2
     bindings.0.slave   a
     bindings.0.channel 0
@@ -402,6 +541,8 @@ pcm.volumioSoftVol {
     min_dB -50.0
     resolution 100
 }
+
+$(render_analyser_eq "jukeboxHdmi" "$HDMI_RATE")
 
 pcm.jukeboxHdmi {
     type            plug
@@ -509,7 +650,13 @@ JB_USB_CARD=$USB_CARD
 JB_USB_RATE=$USB_RATE
 JB_JACK_LEVEL=$JACK_LEVEL
 JB_JACK_LEVEL_RAW=$JACK_LEVEL_RAW
+JB_ANALYSER_TRIM=$ANALYSER_TRIM
+JB_ANALYSER_FREQ_HZ=$ANALYSER_FREQ_HZ
+JB_ANALYSER_GAIN_DB=$ANALYSER_GAIN_DB
+JB_ANALYSER_Q=$ANALYSER_Q
 EOF
+  write_analyser_eq_controls "$EQ_CONTROLS_SRC" >/dev/null
+  ok "analyser bass trim: $ANALYSER_TRIM (${ANALYSER_FREQ_HZ} Hz ${ANALYSER_GAIN_DB} dB, Q ${ANALYSER_Q})"
   cat >"$APPLY_DIR/clean-controls.py" <<'PY'
 #!/usr/bin/env python3
 """Remove leftover user mixer elements from an ALSA card (kernel side)."""
@@ -580,6 +727,10 @@ load_config_env() {
     USB_RATE="${JB_USB_RATE:-48000}"
     JACK_LEVEL="${JB_JACK_LEVEL:-0dB}"
     JACK_LEVEL_RAW="${JB_JACK_LEVEL_RAW:-0}"
+    ANALYSER_TRIM="${JB_ANALYSER_TRIM:-on}"
+    ANALYSER_FREQ_HZ="${JB_ANALYSER_FREQ_HZ:-60}"
+    ANALYSER_GAIN_DB="${JB_ANALYSER_GAIN_DB:--6.02}"
+    ANALYSER_Q="${JB_ANALYSER_Q:-0.5}"
   fi
 }
 
@@ -794,6 +945,10 @@ install_live_files() {
   local v="$1"
   put_file "$APPLY_DIR/snippet.$v.conf" "$SNIPPET_PATH"
   put_file "$APPLY_DIR/asound.$v.conf" /etc/asound.conf
+  # The controls file must be writable by whoever opens the chain (mpd);
+  # alsaequal mmaps it read/write even for plain playback.
+  install -d -m 0755 /var/lib/jukebox-audio
+  install -m 0666 "$EQ_CONTROLS_SRC" "$EQ_CONTROLS_DEST"
 }
 
 wait_for_volumio() {
@@ -987,6 +1142,7 @@ cmd_install() {
   backup_config
 
   say "Writing ALSA split configuration"
+  ensure_dsp_deps
   write_canonical
   wanted_variant="$(variant_for_now)"
   if [ "$SECOND_OUTPUT" = "hdmi" ] && [ "$wanted_variant" = "daconly" ]; then
@@ -1079,6 +1235,15 @@ cmd_apply() {
   if [ ! -f "$CONFIG_ENV" ] || [ ! -f "$APPLY_DIR/asound.jack.conf" ]; then
     log "apply: canonical files missing; regenerating"
     write_canonical
+  fi
+  # Keep the analyser controls file in step with the canonical copy.
+  if [ "$ANALYSER_TRIM" = "on" ] && [ -f "$EQ_CONTROLS_SRC" ]; then
+    ensure_dsp_deps
+    install -d -m 0755 /var/lib/jukebox-audio
+    if ! cmp -s "$EQ_CONTROLS_SRC" "$EQ_CONTROLS_DEST" 2>/dev/null; then
+      install -m 0666 "$EQ_CONTROLS_SRC" "$EQ_CONTROLS_DEST"
+      log "apply: refreshed analyser controls file"
+    fi
   fi
   if [ "$SECOND_OUTPUT" = "hdmi" ] && [ "$BOOT_APPLY" = 1 ]; then
     # give the HDMI sink a moment to come up before deciding
@@ -1225,6 +1390,29 @@ PY
     warn "volume control not materialized yet (appears on first playback)"
   fi
 
+  if [ "$v" != "daconly" ] && [ "$v" != "none" ]; then
+    if [ "$ANALYSER_TRIM" = "on" ]; then
+      if grep -q 'pcm.jukeboxEq' /etc/asound.conf 2>/dev/null \
+         && grep -q 'type *equal' /etc/asound.conf 2>/dev/null; then
+        ok "analyser bass trim active (${ANALYSER_FREQ_HZ} Hz ${ANALYSER_GAIN_DB} dB on the second branch)"
+      else
+        fail "analyser bass trim enabled but the equal plugin is not wired in"; rc=$((rc + 1))
+      fi
+      if [ -f "$EQ_CONTROLS_DEST" ]; then
+        ok "analyser controls file present ($EQ_CONTROLS_DEST)"
+      else
+        fail "analyser controls file missing ($EQ_CONTROLS_DEST)"; rc=$((rc + 1))
+      fi
+    else
+      if grep -q 'pcm.jukeboxEq' /etc/asound.conf 2>/dev/null \
+         && grep -q 'type *equal' /etc/asound.conf 2>/dev/null; then
+        fail "analyser bass trim is set to off but the equal plugin is still wired in"; rc=$((rc + 1))
+      else
+        ok "analyser bass trim disabled (transparent second branch)"
+      fi
+    fi
+  fi
+
   if alsa_playback_test "$v"; then
     if [ "$v" = "daconly" ]; then
       ok "chain opens (DAC only)"
@@ -1269,6 +1457,11 @@ cmd_status() {
     if detect_usb_card; then echo "usb card        : present ($USB_CARD)"; else echo "usb card        : absent (DAC-only fallback)"; fi
   fi
   if grep -q 'mixer_type[[:space:]]*"none"' /etc/mpd.conf 2>/dev/null; then echo "mpd mixer       : disabled"; else echo "mpd mixer       : active (may affect second output)"; fi
+  if [ "$ANALYSER_TRIM" = "on" ]; then
+    echo "analyser trim   : on (${ANALYSER_FREQ_HZ} Hz ${ANALYSER_GAIN_DB} dB, Q ${ANALYSER_Q})"
+  else
+    echo "analyser trim   : off"
+  fi
 }
 
 cmd_uninstall() {
@@ -1296,6 +1489,7 @@ cmd_uninstall() {
   fi
 
   rm -rf "$APPLY_DIR"
+  rm -rf /var/lib/jukebox-audio
   systemctl restart volumio >/dev/null 2>&1 || true
   systemctl restart mpd >/dev/null 2>&1 || true
   ok "uninstalled (reboot recommended)"
@@ -1314,6 +1508,17 @@ main() {
         SECOND_OUTPUT="$1"
         shift
         ;;
+      --no-analyser-trim) ANALYSER_TRIM=off; shift ;;
+      --analyser-trim=*) ANALYSER_TRIM="${1#*=}"; shift ;;
+      --analyser-trim)
+        shift
+        [ $# -gt 0 ] || die "--analyser-trim needs a value: on|off"
+        ANALYSER_TRIM="$1"
+        shift
+        ;;
+      --analyser-freq=*) ANALYSER_FREQ_HZ="${1#*=}"; shift ;;
+      --analyser-gain=*) ANALYSER_GAIN_DB="${1#*=}"; shift ;;
+      --analyser-q=*) ANALYSER_Q="${1#*=}"; shift ;;
       -h|--help) usage; exit 0 ;;
       install|apply|verify|status|uninstall) mode="$1"; shift ;;
       *) die "unknown argument: $1" ;;
@@ -1322,6 +1527,10 @@ main() {
   case "$SECOND_OUTPUT" in
     jack|hdmi|usb|none) ;;
     *) die "--second-output must be jack|hdmi|usb|none (got: $SECOND_OUTPUT)" ;;
+  esac
+  case "$ANALYSER_TRIM" in
+    on|off) ;;
+    *) die "--analyser-trim must be on|off (got: $ANALYSER_TRIM)" ;;
   esac
   [ -n "$mode" ] || { usage; exit 1; }
   case "$mode" in
