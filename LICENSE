@@ -21,62 +21,150 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-ADDITIONAL DISCLAIMER OF LIABILITY AND SAFETY NOTICE
+ADDITIONAL SAFETY AND LIABILITY NOTICE
+======================================
+
+This notice applies to the entire repository and all material contained within
+it, including, without limitation, source code, firmware, scripts,
+configuration files, documentation, circuit designs, 3D models, CAD files,
+instructions, and other associated material (collectively, the "Material").
+
+The Material is provided for informational, educational and/or experimental
+purposes. It has not been certified, safety-rated, or approved for any
+particular application.
+
+By using, modifying, building, printing, assembling, wiring, connecting,
+powering, flashing, testing, distributing, or otherwise interacting with the
+Material, you are solely responsible for determining whether it is suitable
+and safe for your intended use and for complying with all applicable laws,
+regulations, standards, and safety requirements.
+
+1. ASSUMPTION OF RISK
+
+You assume all risks associated with the Material and its use.
+
+The author(s) and copyright holder(s) make no representation or warranty that
+the Material is accurate, complete, reliable, safe, functional, suitable for
+any particular purpose, or free from defects.
+
+You are responsible for independently reviewing, testing, validating, and
+assessing the Material before using it, particularly in any application where
+failure could result in injury, death, property damage, equipment damage, data
+loss, or other significant harm.
+
+2. ELECTRICAL, PHYSICAL AND OTHER HAZARDS
+
+The Material may include electrical circuits, firmware controlling power
+switching devices, relay interfaces, power supplies, 3D-printable parts, and
+other components that may present hazards depending on how they are built or
+used.
+
+The reference implementation may involve a relay switching the low-voltage
+output side of a PC ATX power supply. Although the relay contacts in that
+application may switch low voltage, the associated power supply is connected
+to mains electricity and may contain high voltages, high currents, stored
+electrical energy, heat, and other hazards.
+
+Other implementations or modifications of the Material may involve mains
+voltage, high currents, heat, moving parts, mechanical loads, batteries,
+energy storage, or other potentially hazardous conditions.
+
+Incorrect design, component selection, wiring, assembly, printing, firmware,
+configuration, installation, modification, or operation may result in fire,
+electric shock, burns, equipment damage, property damage, personal injury, or
+death.
+
+The Material is not a certified safety system and must not be relied upon as
+the sole safety mechanism in any application where failure could cause injury,
+death, or significant property or environmental damage.
+
+3. QUALIFIED PERSONNEL AND SAFETY PRACTICES
+
+If you are not appropriately qualified or experienced to work with electrical,
+electronic, mechanical, or other potentially hazardous systems involved in
+your intended application, do not attempt to build, modify, install, or use
+the Material without appropriate professional assistance.
+
+Where applicable, consult a qualified electrician, engineer, or other
+appropriately licensed professional.
+
+You are responsible for using appropriate protective equipment, isolation
+procedures, fusing, grounding, enclosures, insulation, current and voltage
+ratings, thermal protection, mechanical protection, and other safeguards
+appropriate to your particular implementation.
+
+4. NO WARRANTY OR GUARANTEE
+
+To the maximum extent permitted by applicable law, the author(s) and copyright
+holder(s) provide no additional warranties or guarantees regarding the
+Material beyond those expressly stated in the applicable license.
+
+No guarantee is made that the Material will operate correctly, safely,
+reliably, continuously, or without interruption, or that it will be suitable
+for any particular hardware, software, environment, application, or purpose.
+
+5. LIMITATION OF LIABILITY
+
+To the maximum extent permitted by applicable law, the author(s) and copyright
+holder(s) shall not be liable for any direct, indirect, incidental, special,
+consequential, exemplary, or punitive damages, or for any other loss or damage
+arising out of or related to the Material or its use.
+
+This includes, without limitation, damage to hardware or property, fire,
+electric shock, burns, personal injury, death, loss of data, loss of profits,
+business interruption, or damage resulting from errors, defects, failures,
+misconfiguration, modification, misuse, or improper installation of the
+Material, whether such liability is alleged to arise under contract, tort,
+negligence, strict liability, product liability, or any other legal theory.
+
+6. MODIFICATIONS AND DERIVATIVE WORKS
+
+If you modify, adapt, combine, or otherwise create derivative works based on
+the Material, you are solely responsible for evaluating the resulting design
+and its safety.
+
+A modification may introduce risks that are not present in the original
+Material. The author(s) and copyright holder(s) assume no responsibility for
+the safety, functionality, compatibility, or performance of modified versions.
+
+7. THIRD-PARTY COMPONENTS
+
+The Material may reference, incorporate, or depend upon third-party software,
+hardware, libraries, components, documentation, services, or other materials.
+
+Such third-party materials may be subject to separate licenses, warranties,
+terms, or safety requirements. The author(s) and copyright holder(s) are not
+responsible for third-party materials or for any risks arising from their use.
+
+8. NO SUPPORT OR MAINTENANCE OBLIGATION
+
+The author(s) and copyright holder(s) have no obligation to provide technical
+support, maintenance, updates, corrections, replacement parts, warranty
+service, or security fixes for the Material.
+
+The author(s) may modify, discontinue, or abandon the Material at any time
+without notice.
+
+9. COMPLIANCE WITH APPLICABLE LAW
+
+You are solely responsible for determining and complying with all laws,
+regulations, electrical codes, product safety requirements, certification
+requirements, and other applicable rules relating to your use, modification,
+manufacture, distribution, installation, or operation of the Material.
+
+Nothing in this notice is intended to exclude, restrict, or limit any liability,
+right, or obligation that cannot lawfully be excluded, restricted, or limited
+under applicable law.
+
+10. ACCEPTANCE
+
+If you use the Material, you acknowledge that you have read and understood
+this notice and that you are responsible for evaluating the risks associated
+with your particular use of the Material.
+
+If you do not agree with these terms or are not prepared to accept the
+associated risks and responsibilities, do not use the Material.
+
 ================================================================================
-
-This license applies to the entire repository, including its source code,
-firmware, scripts, configuration, documentation, 3D models and any other
-material (together, the "Material"). By downloading, copying, building,
-flashing, printing, assembling, wiring, connecting, powering, using or
-distributing the Material, or any part of it, you acknowledge and agree to
-the following, to the maximum extent permitted by applicable law:
-
-1. ASSUMPTION OF ALL RISK. You use the Material entirely at your own risk and
-   under your sole responsibility. The author(s) and copyright holder(s) give
-   no guarantee whatsoever that the Material is correct, complete, safe,
-   functional, fit for any purpose or free of defects. You are solely
-   responsible for evaluating, testing and deciding whether to use it.
-
-2. PHYSICAL AND ELECTRICAL HAZARDS. The Material includes firmware that drives
-   a power relay and 3D models intended to be printed and assembled with
-   electrical and electronic components. In the reference build the relay
-   switches a PC ATX power supply (low-voltage relay contacts), but such a
-   supply still connects to mains at its input and carries high currents,
-   heat and stored energy, and other uses of the Material may involve mains
-   voltage, high currents, heat, moving parts or other hazards. Incorrect
-   wiring, assembly, printing or use can cause fire, electric shock, burns,
-   property damage, personal injury or death. No part of the Material is a
-   certified, tested or safety-rated design. Do not use it where failure could
-   cause injury, death or significant damage. If you are not qualified to work
-   with electronics or mains electricity, do not attempt it; consult a
-   licensed professional.
-
-3. NO RESPONSIBILITY FOR DAMAGES. To the maximum extent permitted by law, the
-   author(s) and copyright holder(s) shall NOT be liable for any direct,
-   indirect, incidental, special, consequential, exemplary or punitive
-   damages, nor for any loss of any kind, arising out of or in any way related
-   to the Material or its use, including but not limited to fire, electric
-   shock, damage to hardware or property, loss of data, lost profits, personal
-   injury or death, whether based on contract, tort, negligence, strict
-   liability, product liability or any other theory, even if advised of the
-   possibility of such damages.
-
-4. INDEMNIFICATION. You agree to indemnify, defend and hold harmless the
-   author(s) and copyright holder(s) from and against any and all claims,
-   liabilities, damages, losses, costs and expenses (including reasonable
-   legal fees) arising from or related to your use, modification, assembly,
-   distribution or misuse of the Material, or your violation of any law or
-   regulation.
-
-5. NO OBLIGATION TO SUPPORT OR FIX. The author(s) have no obligation to
-   provide updates, corrections, support, warranty service or fixes, and may
-   abandon or change the Material at any time without notice.
-
-6. THIRD-PARTY COMPONENTS. The Material may reference or depend on third-party
-   software, hardware or documentation that is governed by its own terms. The
-   author(s) are not responsible for any third-party component.
-
-7. MANDATORY LAW PREVAILS. Nothing in this notice excludes or limits any
-   liability that cannot be excluded or limited under applicable law.
-
-If you do not accept these terms in full, do not use the Material.
+END OF LICENSE AND SAFETY NOTICE
+================================
