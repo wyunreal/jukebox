@@ -59,9 +59,9 @@ switching devices, relay interfaces, power supplies, 3D-printable parts, and
 other components that may present hazards depending on how they are built or
 used.
 
-The reference implementation may involve a relay switching the low-voltage
-output side of a PC ATX power supply. Although the relay contacts in that
-application may switch low voltage, the associated power supply is connected
+The reference implementation may involve a relay switching a low-voltage control
+signal (such as PS_ON) of a PC ATX power supply. Although the relay contacts in
+that application may switch low voltage, the associated power supply is connected
 to mains electricity and may contain high voltages, high currents, stored
 electrical energy, heat, and other hazards.
 
@@ -95,13 +95,15 @@ appropriate to your particular implementation.
 
 4. NO WARRANTY OR GUARANTEE
 
-To the maximum extent permitted by applicable law, the author(s) and copyright
-holder(s) provide no additional warranties or guarantees regarding the
-Material beyond those expressly stated in the applicable license.
+The Material is provided "AS IS" and "AS AVAILABLE", without warranty of any
+kind, express or implied, including but not limited to the implied warranties of
+merchantability, fitness for a particular purpose, title, and non-infringement.
+The author(s) and copyright holder(s) do not warrant that the Material will meet
+your requirements, or that it will operate correctly, safely, reliably, without
+interruption, or free from error or defect.
 
-No guarantee is made that the Material will operate correctly, safely,
-reliably, continuously, or without interruption, or that it will be suitable
-for any particular hardware, software, environment, application, or purpose.
+No guarantee is made that the Material will be suitable for any particular
+hardware, software, environment, application, or purpose.
 
 5. LIMITATION OF LIABILITY
 
@@ -115,7 +117,8 @@ electric shock, burns, personal injury, death, loss of data, loss of profits,
 business interruption, or damage resulting from errors, defects, failures,
 misconfiguration, modification, misuse, or improper installation of the
 Material, whether such liability is alleged to arise under contract, tort,
-negligence, strict liability, product liability, or any other legal theory.
+negligence, strict liability, product liability, or any other legal theory,
+even if a remedy is found to fail of its essential purpose.
 
 6. MODIFICATIONS AND DERIVATIVE WORKS
 
