@@ -73,6 +73,22 @@ VOLUME_INVERT = _env_bool("JP_VOLUME_INVERT", False)
 POLL_MS = _env_int("JP_POLL_MS", 200)
 RESCAN_MS = _env_int("JP_RESCAN_MS", 3000)
 
+# --- tone control (bass/treble via CamillaDSP) ------------------------------
+# The jukebox-audio chain runs audio through CamillaDSP (the ALSA cdsp plugin).
+# Its config carries two shelf gains marked JUKEBOX_TONE_BASS / JUKEBOX_TONE_TREBLE.
+# Both pots read 0..20 with 10 = flat (0 dB); they map to +/-TONE_MAX_DB.
+TONE_ENABLE = _env_bool("JP_TONE", True)
+TONE_MAX_DB = _env_int("JP_TONE_MAX_DB", 12)
+TONE_POT_CENTER = _env_int("JP_TONE_CENTER", 10)
+TONE_POT_SPAN = _env_int("JP_TONE_SPAN", 10) or 1
+TONE_BASS_INVERT = _env_bool("JP_TONE_BASS_INVERT", False)
+TONE_TREBLE_INVERT = _env_bool("JP_TONE_TREBLE_INVERT", False)
+TONE_TEMPLATE = _env("JP_TONE_TEMPLATE", "/usr/local/jukebox-audio/cdsp/camilla.%s.yml")
+TONE_ACTIVE = _env("JP_TONE_ACTIVE", "/var/lib/jukebox-audio/camilla-active.%s.yml")
+TONE_VARIANTS = ("usb", "hdmi", "jack", "daconly")
+# CamillaDSP is (re)started by the cdsp plugin; we locate it to reload it.
+CAMILLA_PROC = _env("JP_CAMILLA_PROC", "camilladsp")
+
 # Arduino Micro (official + Arduino LLC/SA USB ids) and clones that identify
 # themselves by product string.  Used only to pick the right ttyACM/ttyUSB.
 ARDUINO_VID_PID = {
@@ -85,6 +101,14 @@ ARDUINO_HINTS = ("arduino",)
 
 VOLUMIO_RE = re.compile(r"^POT volume:\s*(-?\d+)")
 BALANCE_RE = re.compile(r"^POT balance:\s*(-?\d+)")
+# The two spare pots feed the tone control. Which firmware line maps to which
+# function is configurable so we can pin it down by moving each pot.
+TONE_POTS = {
+    "single": r"^POT single:\s*(-?\d+)",
+    "multisecond": r"^POT multi second:\s*(-?\d+)",
+}
+TONE_BASS_POT = _env("JP_TONE_BASS_POT", "single")
+TONE_TREBLE_POT = _env("JP_TONE_TREBLE_POT", "multisecond")
 
 
 def log(msg: str) -> None:
@@ -124,6 +148,15 @@ def balance_lr(base: int, pan: float) -> tuple[int, int]:
     if pan < 0:                      # pan left -> attenuate right
         return base, max(0, int(round(base * (1.0 + pan))))
     return base, base
+
+
+def map_tone(pot: int, center: int = TONE_POT_CENTER, span: int = TONE_POT_SPAN,
+             max_db: int = TONE_MAX_DB, invert: bool = False) -> float:
+    """Tone pot -> shelf gain in dB. Pot == center -> 0.0 dB (flat)."""
+    g = (int(clamp(pot, 0, 10 ** 6)) - center) / float(span) * max_db
+    if invert:
+        g = -g
+    return float(clamp(g, -max_db, max_db))
 
 
 # -------------------------------------------------------------------- serial
@@ -313,6 +346,99 @@ def set_volume(percent: int) -> bool:
     return write_softmaster(raw, raw)
 
 
+# ---------------------------------------------------------------------- tone
+
+
+class ToneControl:
+    """Rewrite the CamillaDSP shelf gains and reload it live (SIGHUP)."""
+
+    def __init__(self) -> None:
+        self.bass_db: float | None = None
+        self.treble_db: float | None = None
+        self.last: tuple[float, float] | None = None
+        self.variant: str | None = None
+        self._warned = False
+
+    def pot_feed(self, name: str, value: int) -> None:
+        if name == TONE_BASS_POT:
+            self.bass_db = map_tone(value, invert=TONE_BASS_INVERT)
+        elif name == TONE_TREBLE_POT:
+            self.treble_db = map_tone(value, invert=TONE_TREBLE_INVERT)
+
+    def _active_variant(self) -> str | None:
+        for v in TONE_VARIANTS:
+            if os.path.exists(TONE_ACTIVE % v):
+                return v
+        return None
+
+    @staticmethod
+    def _rewrite(path: str, which: str, value: float) -> bool:
+        """Set the gain of the low/high shelf in a CamillaDSP config.
+
+        Locates the filter by its biquad type (Lowshelf/Highshelf) so it does
+        not depend on any comment marker, and keeps the file's mode/ownership
+        so MPD's cdsp plugin can keep rewriting it.
+        """
+        try:
+            with open(path) as fh:
+                text = fh.read()
+        except OSError:
+            return False
+        type_re = "Lowshelf" if which == "bass" else "Highshelf"
+        # Match the filter block of the requested type and replace its gain.
+        pattern = re.compile(
+            r"(type:\s*%s\b(?:[^\n]*\n)*?[^\n]*?gain:\s*)([-+]?[0-9]*\.?[0-9]+)"
+            % type_re)
+        new_text, n = pattern.subn(lambda m: m.group(1) + ("%.2f" % value), text)
+        if n == 0 or new_text == text:
+            return n > 0
+        try:
+            st = os.stat(path)
+            tmp = path + ".tmp"
+            with open(tmp, "w") as fh:
+                fh.write(new_text)
+            os.chmod(tmp, st.st_mode & 0o7777)
+            try:
+                os.chown(tmp, st.st_uid, st.st_gid)
+            except OSError:
+                pass
+            os.replace(tmp, path)
+        except OSError:
+            return False
+        return True
+
+    def _reload_camilla(self) -> None:
+        try:
+            subprocess.run(["pkill", "-HUP", "-x", CAMILLA_PROC], timeout=5,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def apply(self) -> None:
+        if not TONE_ENABLE or self.bass_db is None or self.treble_db is None:
+            return
+        if self.last == (self.bass_db, self.treble_db):
+            return
+        # Rewrite every variant template (so the gains persist whatever branch
+        # the chain runs) plus the active config CamillaDSP is reading now.
+        paths = [TONE_TEMPLATE % v for v in TONE_VARIANTS]
+        paths += [TONE_ACTIVE % v for v in TONE_VARIANTS if os.path.exists(TONE_ACTIVE % v)]
+        wrote = False
+        for path in paths:
+            if self._rewrite(path, "bass", self.bass_db):
+                wrote = True
+            self._rewrite(path, "treble", self.treble_db)
+        if not wrote and not any(os.path.exists(TONE_ACTIVE % v) for v in TONE_VARIANTS):
+            if not self._warned:
+                log("tone: no CamillaDSP config found (is jukebox-audio installed?)")
+                self._warned = True
+            return
+        self._warned = False
+        self._reload_camilla()
+        self.last = (self.bass_db, self.treble_db)
+        log("tone bass %+.1f dB / treble %+.1f dB" % (self.bass_db, self.treble_db))
+
+
 # ----------------------------------------------------------------- controller
 
 
@@ -324,6 +450,7 @@ class Controller:
         self.volume_dirty = False
         self.warned_missing = False
         self.next_ensure = 0.0
+        self.tone = ToneControl()
 
     def feed(self, line: str) -> None:
         m = VOLUMIO_RE.match(line)
@@ -336,6 +463,12 @@ class Controller:
         m = BALANCE_RE.match(line)
         if m:
             self.pot_balance = int(m.group(1))
+            return
+        for name, pattern in TONE_POTS.items():
+            m = re.match(pattern, line)
+            if m:
+                self.tone.pot_feed(name, int(m.group(1)))
+                return
 
     def apply_volume(self) -> None:
         if self.pot_volume is None or not self.volume_dirty:
@@ -374,6 +507,7 @@ class Controller:
     def tick(self) -> None:
         self.apply_volume()
         self.apply_balance()
+        self.tone.apply()
 
 
 # ---------------------------------------------------------------------- probe
