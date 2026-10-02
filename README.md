@@ -45,6 +45,8 @@ software/jukebox-pots/          # pot volume/balance/tone from the Arduino
 └── README.md                   # design doc: mapping, detection, analyser safety
 
 skills/jukebox/SKILL.md         # agent skill to operate and troubleshoot the box
+
+docs/moode-port-plan.md         # plan: porting the audio/control stack to moOde
 ```
 
 The audio setup splits playback into the I2S DAC (speakers, volume-controlled
