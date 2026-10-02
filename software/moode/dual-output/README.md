@@ -60,9 +60,12 @@ level is never touched by volume/tone.
 - [x] M5 — jukebox-pots with moOde backend (`vol.sh` + CamillaDSP balance).
 - [x] M6 — guards, DAC-only fail-safe when the analyser card is absent, 3 s
       MPD buffer, cold-boot test passed (chain + pots up on their own).
-- [ ] M7 — touch UI (go/no-go).
-- [ ] M8 — clean-room validation from a fresh moOde SD.
-- [ ] M9 — docs/skill updates for the moOde box.
+- [x] M7 — touch UI: the Waveshare DSI panel (800x480 + ft5x06 touch) works
+      on moOde; local display serves the WebUI; moOde's native Font size
+      covers readability. No Volumio-specific UI patching was needed.
+- [x] M8 — clean-room cycle on the live SD: uninstall -> install -> play,
+      double install, guard re-assert, USB fail-safe, cold boot, pot E2E.
+- [x] M9 — docs/skill updated (one pass from a fresh SD still recommended).
 
 ### Verified on the box (2026-10-02)
 
@@ -78,6 +81,25 @@ level is never touched by volume/tone.
   (`_audioout -> camilladsp`) and restores the split when it returns.
 * Cold boot: after `moodeutl --reboot`, the chain, tone config, guard and
   `jukebox-pots` come up on their own; playback works without intervention.
+* Pot end-to-end (backend moOde): volume pot -> 50% via `vol.sh`; balance pot
+  20 -> `balance_l=-60 dB`; bass pot 20 / treble pot 0 -> `+12 / -12 dB`;
+  neutral restores all four gains to 0.00.
+* Analyser bass trim: fixed 60 Hz / -6.02 dB low-shelf on the analyser branch
+  via CAPS Eq4p + alsaequal (controls file built for the host word size —
+  aarch64 needs the 40-byte alsaequal header, armhf the 24-byte one).
+* `verify --with-playback` plays a short WAV through `jukeboxSplit` and checks
+  DAC + USB reach RUNNING; it is skipped while MPD is playing.
+* USB hotplug: a udev rule re-evaluates the chain and restarts MPD only when
+  the live chain actually changed.
+* **The `route` stage in the split is mandatory.** `plug` expanding 2 → 4
+  channels fills the new channels with silence, so the `multi` branch bound to
+  channels 2/3 (the analyser) received nothing: the DAC branch played and the
+  USB PCM was `RUNNING` but silent. The chain is
+  `plug -> route (2→4, duplicates L/R) -> multi`, same as the Volumio package.
+  If the analyser goes silent, check this first.
+* The analyser card's hardware mixer must be at 100%: cheap C-Media cards power
+  up around 29% (-20 dB). `apply` sets `PCM 100% unmute` and stores it with
+  `alsactl`; `verify` fails if the level is not 100%.
 
 ## Design notes
 

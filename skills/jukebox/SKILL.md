@@ -255,6 +255,7 @@ states above.
 | moOde: DAC missing in Audio Config despite selecting it | wrong overlay (e.g. HiFiBerry PCM5122) for this PCM1794A board | `dtoverlay=i2s-dac` in `/boot/firmware/config.txt`, select "Generic-I2S (i2s-dac)", reboot |
 | moOde: split/tone reverted after touching Audio Config | moOde rewrote `_audioout.conf` / the CamillaDSP selection | `sudo /usr/local/jukebox-moode/jukebox-moode.sh apply`; check the guard is active |
 | moOde: volume doesn't reach the speakers | Volume type is not CamillaDSP | Audio Config → Volume type → CamillaDSP, or `cdsp` isn't selected as working config |
+| moOde: DAC plays but the USB analyser gets no signal | split missing the `route` stage, or the card mixer at a low level | `grep jukeboxRoute /etc/alsa/conf.d/90-jukebox-split.conf` (must exist); `amixer -c <usb> sset PCM 100%`; `apply` fixes both |
 | Plays ~1 s (analyser blips) then stops; `mpd.log` shows `Error writing output config file` | active CamillaDSP config not writable by `mpd` (stale `root:0644` copy) | `chmod 0666 /var/lib/jukebox-audio/camilla-active.*.yml`, then `apply`; the plugin now writes it atomically with mode 0666 |
 | Tone stops after reboot | CamillaDSP config regenerated without gains | the installer preserves gains; re-check `grep gain /usr/local/jukebox-audio/cdsp/camilla.*.yml` |
 | Chain refuses to open | files hand-edited and guard reverted mid-play, or device busy | `mpc stop`; `apply`; `verify --with-playback` |
