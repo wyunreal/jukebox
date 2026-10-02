@@ -19,6 +19,7 @@
 #include <strings.h>
 #include <sys/eventfd.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -597,9 +598,17 @@ static int start_camilla(cdsp_t *pcm) {
         SNDERR("Error reading input config file %s\n", pcm->config_in);
         return -EINVAL;
       }
-      FILE *cfgout = fopen(pcm->cargs[1], "w");
+      // Render the config atomically. The destination may be owned by another
+      // user (the chain is opened by root at install time and by mpd during
+      // playback), so never truncate it in place: write a sibling temp file
+      // and rename it over the destination (that only needs write permission
+      // on the directory, which is 0777). Widen the mode to 0666 so every
+      // future opener can rewrite it too.
+      char cfgpath[PATH_MAX];
+      snprintf(cfgpath, sizeof(cfgpath), "%s.tmp.%ld", pcm->cargs[1], (long)getpid());
+      FILE *cfgout = fopen(cfgpath, "w");
       if(!cfgout) {
-        SNDERR("Error writing output config file %s\n", pcm->cargs[1]);
+        SNDERR("Error writing output config file %s\n", cfgpath);
         return -EINVAL;
       }
       char buf[1000];
@@ -615,6 +624,14 @@ static int start_camilla(cdsp_t *pcm) {
       }
       fclose(cfgin);
       fclose(cfgout);
+      if(chmod(cfgpath, 0666) != 0) {
+        warn("Could not widen permissions on %s: %s\n", cfgpath, strerror(errno));
+      }
+      if(rename(cfgpath, pcm->cargs[1]) != 0) {
+        SNDERR("Error installing output config file %s: %s\n", pcm->cargs[1], strerror(errno));
+        unlink(cfgpath);
+        return -EINVAL;
+      }
     } else if(pcm->config_cmd) {
       char command[1000];
       // Call the config_cmd with the hw params to do whatever
