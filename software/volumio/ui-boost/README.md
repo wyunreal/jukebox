@@ -70,7 +70,7 @@ sudo /usr/local/jukebox-ui/jukebox-ui.sh verify
 
 - **Do not enable HDMI audio.** HDMI here is only a phantom connector that
   Volumio forces on; this kit turns the output off. Audio stays on the I2S DAC
-  and the USB second output (`software/volumio-dual-output/`). See the
+  and the USB second output (`software/volumio/dual-output/`). See the
   `jukebox` skill's golden rules.
 - The `now_playing` CSS is patched in the installed plugin build. A future
   plugin update replaces it; re-run `apply` (the guard only watches the two
