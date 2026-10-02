@@ -67,7 +67,7 @@ the split within seconds. That is by design.
 ## The jukebox-audio tool
 
 Canonical files + helper live in `/usr/local/jukebox-audio/`; the same script
-is in this repo at `software/volumio-dual-output/` (full design docs in its
+is in this repo at `software/volumio/dual-output/` (full design docs in its
 README).
 
 ```sh
@@ -95,7 +95,7 @@ it as `analyser trim :`.
   those files the guard will revert them — edit the canonical copies in
   `/usr/local/jukebox-audio/` and run `apply` instead (or stop the path unit
   while experimenting).
-- From a dev machine: `software/volumio-dual-output/deploy.sh install
+- From a dev machine: `software/volumio/dual-output/deploy.sh install
   --second-output usb` copies the installer over SSH and runs it remotely.
 
 ## The jukebox-ui tool (touch screen speed)
@@ -103,7 +103,7 @@ it as `analyser trim :`.
 The touch UI was sluggish/scrolling badly because Chromium was forced into
 software compositing, the `now_playing` UI used very heavy CSS blurs, and a
 phantom HDMI output forced the X screen to 848px over an 800px panel. Fixed by
-`software/volumio-ui-boost/` (canonical copies in `/usr/local/jukebox-ui/`).
+`software/volumio/ui-boost/` (canonical copies in `/usr/local/jukebox-ui/`).
 
 ```sh
 sudo /usr/local/jukebox-ui/jukebox-ui.sh status   # overview + X screen
@@ -208,7 +208,7 @@ states above.
 
 ## Repo map (for reference)
 
-- `software/volumio-dual-output/` — installer, deploy helper, README (the full
+- `software/volumio/dual-output/` — installer, deploy helper, README (the full
   design doc: the ALSA split, the CamillaDSP tone step, variants, the `multi`
   fail-safe). Ships the armv7 `camilladsp` binary and the armhf `cdsp` plugin.
 - `software/jukebox-pots/` — `jukebox-pots.service`: reads `POT volume` /

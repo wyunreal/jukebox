@@ -30,7 +30,7 @@ hardware/3d-models/             # FreeCAD models, grouped by part
 ├── screen/                     # screen supports, cover and joints
 └── Spectrum/                   # spectrum display frame
 
-software/volumio-dual-output/   # custom dual audio output for Volumio
+software/volumio/dual-output/   # custom dual audio output for Volumio
 ├── jukebox-audio.sh            # installer / verify / status (runs on the Pi)
 ├── deploy.sh                   # ship and run the installer over SSH
 ├── camilladsp                  # CamillaDSP v4.1.3 (armv7), tone-control engine
@@ -96,7 +96,7 @@ No STL/STEP exports are committed yet — export from FreeCAD as needed.
 
 Custom dual audio output for Volumio (I2S DAC + constant-level second output
 for the spectrum analyser): see
-[software/volumio-dual-output/README.md](software/volumio-dual-output/README.md).
+[software/volumio/dual-output/README.md](software/volumio/dual-output/README.md).
 The installer runs on the Pi (`sudo ./jukebox-audio.sh install
 --second-output usb`) or is shipped over SSH with `./deploy.sh`.
 

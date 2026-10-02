@@ -246,7 +246,7 @@ and execute the acceptance checklist (§8) without touching anything by heart.
 ### M9 — Repo integration and docs (½ day)
 
 * [ ] New package `software/moode-dual-output/` (installer + aarch64
-      binaries), mirroring `software/volumio-dual-output/`.
+      binaries), mirroring `software/volumio/dual-output/`.
 * [ ] `software/jukebox-pots/` with the backend switch and shared docs.
 * [ ] Update root `README.md`, `skills/jukebox/SKILL.md` (new moOde section
       or sibling skill) and this plan (results).
@@ -258,7 +258,7 @@ and execute the acceptance checklist (§8) without touching anything by heart.
 
 ```sh
 mkdir -p /tmp/opencode
-# run from software/volumio-dual-output (the cdsp/ folder lives there)
+# run from software/volumio/dual-output (the cdsp/ folder lives there)
 docker run --rm -v /tmp/opencode:/out -v "$PWD/cdsp:/src:ro" \
   debian:bookworm bash -c '
     set -e
@@ -320,5 +320,5 @@ does.
 * CamillaDSP (stable releases + aarch64 binary):
   <https://github.com/HEnquist/camilladsp/releases>
 * Volumio design docs in this repo (reference implementation):
-  `software/volumio-dual-output/README.md`,
+  `software/volumio/dual-output/README.md`,
   `software/jukebox-pots/README.md`, `skills/jukebox/SKILL.md`
