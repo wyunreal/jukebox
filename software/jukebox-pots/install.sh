@@ -27,7 +27,9 @@
 #   --balance-span N       pot steps from center to hard pan (default: 10)
 #   --volume-invert / --no-volume-invert
 #   --balance-invert / --no-balance-invert
-#   --no-api               write the mixer directly instead of the Volumio API
+#   --backend NAME         auto|volumio|moode (default: auto)
+#   --balance-max-db N     attenuation at full pan, moOde backend (default: 60)
+#   --no-api               write the mixer directly instead of the player API
 #   --tone / --no-tone     enable/disable the bass+treble pots (default: on)
 #   --tone-max-db N        shelf range at the pot extremes (default: 12)
 #   --tone-center N        pot value that means flat (default: 10)
@@ -59,6 +61,8 @@ BALANCE_SPAN="10"
 VOLUME_INVERT="0"
 BALANCE_INVERT="0"
 USE_API="1"
+BACKEND="auto"
+BALANCE_MAX_DB="60"
 TONE_ENABLE="1"
 TONE_MAX_DB="12"
 TONE_CENTER="10"
@@ -94,6 +98,19 @@ detect_dac_card() {
   return 1
 }
 
+# The service file differs slightly between platforms: Volumio has a
+# volumio.service, moOde starts MPD itself; the daemon backend is auto-picked
+# (JP_BACKEND) but the unit ordering is platform specific.
+detect_platform() {
+  if [ -e /var/www/util/vol.sh ] && [ -e /var/local/www/db/moode-sqlite3.db ]; then
+    echo moode
+  elif [ -e /volumio ]; then
+    echo volumio
+  else
+    echo generic
+  fi
+}
+
 # ------------------------------------------------------------------- install
 
 write_config() {
@@ -110,6 +127,8 @@ JP_BALANCE_SPAN=$BALANCE_SPAN
 JP_VOLUME_INVERT=$VOLUME_INVERT
 JP_BALANCE_INVERT=$BALANCE_INVERT
 JP_USE_API=$USE_API
+JP_BACKEND=$BACKEND
+JP_BALANCE_MAX_DB=$BALANCE_MAX_DB
 JP_TONE=$TONE_ENABLE
 JP_TONE_MAX_DB=$TONE_MAX_DB
 JP_TONE_CENTER=$TONE_CENTER
@@ -129,7 +148,28 @@ install_files() {
 }
 
 install_unit() {
-  cat >"$UNIT" <<EOF
+  local platform
+  platform="$(detect_platform)"
+  if [ "$platform" = "moode" ]; then
+    cat >"$UNIT" <<EOF
+[Unit]
+Description=Jukebox pot volume/balance (PowerAndPots Arduino)
+After=mpd.service sound.target
+Wants=mpd.service
+
+[Service]
+Type=simple
+EnvironmentFile=-$CONFIG_ENV
+ExecStart=$APPLY_DIR/jukebox-pots.py
+Restart=always
+RestartSec=3
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  else
+    cat >"$UNIT" <<EOF
 [Unit]
 Description=Jukebox pot volume/balance (PowerAndPots Arduino)
 After=volumio.service sound.target
@@ -146,6 +186,7 @@ Nice=5
 [Install]
 WantedBy=multi-user.target
 EOF
+  fi
   cat >"$UDEV_RULE" <<'EOF'
 # Rescan for the PowerAndPots Arduino as soon as its serial port appears.
 ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyACM*|ttyUSB*", RUN+="/usr/bin/systemctl --no-block restart jukebox-pots.service"
@@ -155,10 +196,18 @@ EOF
 }
 
 enable_service() {
-  # The tone control rewrites CamillaDSP's active config, so the directory
-  # must stay writable for both this service and MPD's cdsp plugin.
-  install -d -m 0777 /var/lib/jukebox-audio 2>/dev/null || true
-  chmod 0777 /var/lib/jukebox-audio 2>/dev/null || true
+  local platform
+  platform="$(detect_platform)"
+  if [ "$platform" = "moode" ]; then
+    # The tone/balance rewrite edits moOde's CamillaDSP config; moOde keeps
+    # that directory world-writable already, re-assert it just in case.
+    chmod 0777 /usr/share/camilladsp/configs 2>/dev/null || true
+  else
+    # The tone control rewrites CamillaDSP's active config, so the directory
+    # must stay writable for both this service and MPD's cdsp plugin.
+    install -d -m 0777 /var/lib/jukebox-audio 2>/dev/null || true
+    chmod 0777 /var/lib/jukebox-audio 2>/dev/null || true
+  fi
   systemctl enable jukebox-pots.service >/dev/null 2>&1 || true
   systemctl restart jukebox-pots.service
 }
@@ -176,7 +225,14 @@ cmd_install() {
   echo "    serial port  : ${PORT:-<auto-detect>}"
   echo "    volume       : pot 0..$POT_MAX -> 0..$VOLUME_MAX$([ "$VOLUME_INVERT" = 1 ] && echo ' (inverted)')"
   echo "    balance      : pot center $BALANCE_CENTER, span $BALANCE_SPAN$([ "$BALANCE_INVERT" = 1 ] && echo ' (inverted)')"
-  echo "    volume via   : $([ "$USE_API" = 1 ] && echo 'Volumio API' || echo 'direct ALSA mixer')"
+  local platform backend_desc
+  platform="$(detect_platform)"
+  case "$platform:$BACKEND" in
+    moode:*) backend_desc="moOde vol.sh + CamillaDSP balance" ;;
+    *:volumio) backend_desc="Volumio API + SoftMaster balance" ;;
+    *) backend_desc="direct ALSA mixer" ;;
+  esac
+  echo "    platform     : $platform ($backend_desc)"
 
   say "Installing files in $APPLY_DIR"
   install_files
@@ -210,7 +266,8 @@ EOF
 
 cmd_verify() {
   require_root
-  local rc=0 port
+  local rc=0 port platform
+  platform="$(detect_platform)"
   say "Verification"
 
   if [ -x "$APPLY_DIR/jukebox-pots.py" ]; then
@@ -247,11 +304,19 @@ cmd_verify() {
   esac
 
   if [ "${TONE_ENABLE:-1}" = "1" ]; then
-    if ls /usr/local/jukebox-audio/cdsp/camilla.*.yml >/dev/null 2>&1; then
-      ok "tone control config present (CamillaDSP shelves)"
+    local tone_ok=0
+    if [ "$platform" = "moode" ]; then
+      if [ -f /usr/share/camilladsp/configs/jukebox-tone.yml ]; then
+        ok "tone control config present (moOde CamillaDSP, tone + balance)"
+        tone_ok=1
+      fi
     else
-      warn "tone control enabled but no CamillaDSP config found (install jukebox-audio with tone on)"
+      if ls /usr/local/jukebox-audio/cdsp/camilla.*.yml >/dev/null 2>&1; then
+        ok "tone control config present (CamillaDSP shelves)"
+        tone_ok=1
+      fi
     fi
+    [ "$tone_ok" = 1 ] || warn "tone control enabled but no CamillaDSP config found (install the dual-output package)"
     if [ -x /usr/local/bin/camilladsp ]; then
       ok "CamillaDSP present"
     else
@@ -259,9 +324,18 @@ cmd_verify() {
     fi
   fi
 
-  if amixer -c "$DAC_CARD" sget SoftMaster >/dev/null 2>&1; then
-    ok "SoftMaster volume control present on $DAC_CARD (DAC branch only)"
-  else    warn "SoftMaster not materialized yet (appears on first playback)"
+  if [ "$platform" = "moode" ]; then
+    if [ -x /var/www/util/vol.sh ]; then
+      ok "moOde volume control present (vol.sh)"
+    else
+      warn "moOde vol.sh not found; volume pot will fall back to the mixer"
+    fi
+  else
+    if amixer -c "$DAC_CARD" sget SoftMaster >/dev/null 2>&1; then
+      ok "SoftMaster volume control present on $DAC_CARD (DAC branch only)"
+    else
+      warn "SoftMaster not materialized yet (appears on first playback)"
+    fi
   fi
 
   [ "$rc" = 0 ] && say "All checks passed" || say "$rc check(s) failed"
@@ -271,13 +345,19 @@ cmd_verify() {
 cmd_status() {
   [ -f "$CONFIG_ENV" ] && . "$CONFIG_ENV" || true
   DAC_CARD="${JP_DAC_CARD:-$DAC_CARD}"
+  local platform
+  platform="$(detect_platform)"
   echo "jukebox-pots v$(cat "$APPLY_DIR/VERSION" 2>/dev/null || echo '?')"
+  echo "platform     : $platform (backend ${JP_BACKEND:-auto})"
   if [ -d "$APPLY_DIR" ]; then echo "installed    : yes ($APPLY_DIR)"; else echo "installed    : no"; fi
   echo "service      : $(systemctl is-enabled jukebox-pots.service 2>/dev/null || echo -) / $(systemctl is-active jukebox-pots.service 2>/dev/null || echo -)"
   if [ -x "$APPLY_DIR/jukebox-pots.py" ]; then
     JP_DAC_CARD="$DAC_CARD" JP_PORT="${JP_PORT:-}" python3 "$APPLY_DIR/jukebox-pots.py" --probe 2>/dev/null || true
   fi
-  if amixer -c "$DAC_CARD" sget SoftMaster >/dev/null 2>&1; then
+  if [ "$platform" = "moode" ]; then
+    echo "camilla tone : $([ -f /usr/share/camilladsp/configs/jukebox-tone.yml ] && echo present || echo missing)"
+    echo "volume (mpd) : $(moodeutl -q "SELECT value FROM cfg_system WHERE param='volknob'" 2>/dev/null || echo -)"
+  elif amixer -c "$DAC_CARD" sget SoftMaster >/dev/null 2>&1; then
     amixer -c "$DAC_CARD" sget SoftMaster | grep -E "Front (Left|Right)"
   fi
 }
@@ -311,6 +391,10 @@ main() {
       --balance-invert) BALANCE_INVERT=1; shift ;;
       --no-balance-invert) BALANCE_INVERT=0; shift ;;
       --no-api) USE_API=0; shift ;;
+      --backend) BACKEND="$2"; shift 2 ;;
+      --backend=*) BACKEND="${1#*=}"; shift ;;
+      --balance-max-db) BALANCE_MAX_DB="$2"; shift 2 ;;
+      --balance-max-db=*) BALANCE_MAX_DB="${1#*=}"; shift ;;
       --tone) TONE_ENABLE=1; shift ;;
       --no-tone) TONE_ENABLE=0; shift ;;
       --tone-max-db) TONE_MAX_DB="$2"; shift 2 ;;
