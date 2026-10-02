@@ -1190,6 +1190,15 @@ put_file() {
 }
 
 # Install the live ALSA files for a given variant (atomic-ish writes).
+# The cdsp plugin rewrites the active CamillaDSP config on every open and runs
+# as whoever opens the chain: root during install/verify, mpd during playback.
+# If root leaves the file as root:0644, mpd cannot rewrite it and playback dies
+# after ~1 s with "Error writing output config file". Keep it world-writable,
+# whichever user created it last.
+fix_active_perms() {
+  chmod 0666 /var/lib/jukebox-audio/camilla-active.*.yml 2>/dev/null || true
+}
+
 install_live_files() {
   local v="$1"
   put_file "$APPLY_DIR/snippet.$v.conf" "$SNIPPET_PATH"
@@ -1200,6 +1209,7 @@ install_live_files() {
   # open, so it must stay writable by non-root users too.
   install -d -m 0777 /var/lib/jukebox-audio
   install -m 0666 "$EQ_CONTROLS_SRC" "$EQ_CONTROLS_DEST"
+  fix_active_perms
 }
 
 wait_for_volumio() {
@@ -1476,6 +1486,7 @@ cmd_install() {
   fi
 
   cmd_verify || true
+  fix_active_perms
 
   say "Done"
   cat <<EOF
@@ -1511,6 +1522,7 @@ cmd_apply() {
       log "apply: refreshed analyser controls file"
     fi
   fi
+  fix_active_perms
   if [ "$SECOND_OUTPUT" = "hdmi" ] && [ "$BOOT_APPLY" = 1 ]; then
     # give the HDMI sink a moment to come up before deciding
     local i=0

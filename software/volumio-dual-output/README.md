@@ -143,8 +143,11 @@ with the ALSA `cdsp` plugin:
   with `JB_TONE_BUILD_CDSP=1 ./jukebox-audio.sh install` (needs `gcc` and
   `libasound2-dev`), or cross-compile with
   `arm-linux-gnueabihf-gcc -DPIC -std=gnu11 -O2 -fPIC -shared`.
-  Two fixes over upstream are included: exec argument lifetime (the `-f/-r/-n`
-  flags used to arrive empty) and CamillaDSP v4 sample-format names.
+  Three fixes over upstream are included: exec argument lifetime (the `-f/-r/-n`
+  flags used to arrive empty), CamillaDSP v4 sample-format names, and an atomic
+  active-config write (temp file + `rename`, forced mode `0666`) so the file
+  stays writable whichever user opened the chain last (root at install time,
+  `mpd` during playback).
 * `CamillaDSP` (v4.1.3, `camilladsp-linux-armv7.tar.gz`) is shipped as
   `camilladsp` and installed to `/usr/local/bin/`.
 
@@ -210,8 +213,11 @@ live one is selected automatically. `JB_USB_OVERRIDE=on|off` (or
   open the chain.
 * `/var/lib/jukebox-audio` is kept world-writable (`0777`): MPD's `cdsp`
   plugin (unprivileged) rewrites CamillaDSP's active config there on every
-  open, and `jukebox-pots` edits it too. The tone templates under
-  `/usr/local/jukebox-audio/cdsp/` are `0644`.
+  open, and `jukebox-pots` edits it too. The active config itself is written
+  atomically (temp file + `rename`) and forced to `0666`, so a root-created
+  copy (install/verify opens the chain as root) can never block `mpd`; the
+  installer/guard also re-asserts `0666` with `fix_active_perms`. The tone
+  templates under `/usr/local/jukebox-audio/cdsp/` are `0644`.
 * **Analysers:** the tone acts on the DAC branch only. The spectrum analyser
   feed keeps the fixed-level signal (and its own bass trim).
 * **HDMI caveat:** on this Pi, activating an HDMI output can take over the

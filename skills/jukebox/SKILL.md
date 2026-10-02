@@ -172,6 +172,13 @@ states above.
   all-or-nothing: if one branch can't open, everything is silent — the
   fail-safe avoids that by keeping only the DAC branch while the second device
   is away.
+- **The active CamillaDSP config must stay writable by `mpd`.** The `cdsp`
+  plugin rewrites `/var/lib/jukebox-audio/camilla-active.*.yml` on every open;
+  it runs as `mpd` for playback but as root during install/verify. Never
+  pre-create that file as `root:0644` (or `chmod 0644` it): playback then
+  dies after ~1 s with `Error writing output config file` in `mpd.log`. The
+  plugin now writes it atomically and forces `0666`, and `apply`/`install`
+  re-assert the mode (`fix_active_perms`).
 - Reboots are normal after audio changes; the guard + `alsa-restore` restore
   everything (including the `SoftMaster` element) on boot.
 
@@ -189,6 +196,7 @@ states above.
 | Pots do nothing but `jukebox-pots` is active | board not enumerated, wrong port, or `SoftMaster` missing | `sudo /usr/local/jukebox-pots/jukebox-pots.py --probe`; `journalctl -u jukebox-pots` |
 | Tone pots do nothing | tone off (`JB_TONE`), no CamillaDSP config, or the daemon can't write it | check `ls /usr/local/jukebox-audio/cdsp/`; `journalctl -u jukebox-pots \| grep tone`; reinstall `jukebox-audio` with tone on |
 | No sound after installing the tone | CamillaDSP `chunksize` too large for the cdsp pipe (deadlock, XRUN) | keep `chunksize: 512` in the tone template; `apply`; reinstall |
+| Plays ~1 s (analyser blips) then stops; `mpd.log` shows `Error writing output config file` | active CamillaDSP config not writable by `mpd` (stale `root:0644` copy) | `chmod 0666 /var/lib/jukebox-audio/camilla-active.*.yml`, then `apply`; the plugin now writes it atomically with mode 0666 |
 | Tone stops after reboot | CamillaDSP config regenerated without gains | the installer preserves gains; re-check `grep gain /usr/local/jukebox-audio/cdsp/camilla.*.yml` |
 | Chain refuses to open | files hand-edited and guard reverted mid-play, or device busy | `mpc stop`; `apply`; `verify --with-playback` |
 
