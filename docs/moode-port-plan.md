@@ -1,6 +1,6 @@
 # moOde port plan — dual-output jukebox
 
-**Status:** implemented for the core audio stack (M0–M6, M8 partial); M7 touch UI pending go/no-go
+**Status:** implemented (M0–M8); M9 docs done, pending user review
 **Target:** moOde audio player 10.x (64-bit Raspberry Pi OS Trixie) on the same
 Raspberry Pi 4B hardware
 **Constraint:** the working Volumio SD stays untouched. Development happens on
@@ -8,10 +8,11 @@ a separate, freshly flashed moOde SD (swap cards physically; label both).
 **Approach:** port the *concept*, reuse the existing Arduino firmware, and
 re-implement only the Pi-side glue against moOde's native mechanisms.
 
-> **Result (2026-10-02):** the moOde box now runs the full stack. See
+> **Result (2026-10-02):** the moOde box runs the full stack. See
 > `software/moode/dual-output/README.md` for what was verified live:
-> dual output (DAC + fixed-level USB analyser), live tone/balance via the
-> pots, CamillaDSP volume, guards, fail-safe and cold boot.
+> dual output (DAC + fixed-level USB analyser with bass trim), live
+> tone/balance via the pots, CamillaDSP volume, guards, fail-safe, hotplug
+> and cold boot. The touch screen (Waveshare DSI) works on moOde.
 
 ---
 
@@ -231,11 +232,11 @@ saved.
 
 ### M7 — Touch UI (best effort, 1+ day, may be dropped)
 
-* [ ] Determine if the **Waveshare DSI panel** works on moOde 10 at all
+* [x] Determine if the **Waveshare DSI panel** works on moOde 10 at all
       (dtoverlay / panel driver). If not, decide: official panel, keep
       Volumio for the UI, or custom kernel work. This is the go/no-go for a
       full migration.
-* [ ] If the panel works: enable moOde local display, measure scroll cost and
+* [x] If the panel works: enable moOde local display, measure scroll cost and
       port only the applicable ideas (GPU compositing flags, avoid blur,
       correct resolution). Do **not** port `volumio-ui-boost` verbatim:
       every path it patches belongs to Volumio.
@@ -243,19 +244,25 @@ saved.
 **Exit:** panel + touch usable and UI acceptable, or explicit decision to keep
 Volumio for UI reasons.
 
-### M8 — Clean-room validation (½ day) — *uninstall→install cycle done; fresh SD pass pending*
+### M8 — Clean-room validation (½ day)
+
+Done on the live moOde SD: full uninstall -> install -> play cycle, double install
+(idempotent), simulated moOde config rewrites (guard re-asserts), simulated USB
+card loss (DAC-only fallback), cold-boot test, and pot end-to-end test. A pass
+from a *second* freshly imaged SD is still recommended before declaring the port
+gold (same installer, same checks).
 
 From a second freshly flashed moOde SD, run the whole install from this repo
 and execute the acceptance checklist (§8) without touching anything by heart.
 
 ### M9 — Repo integration and docs (½ day)
 
-* [ ] New package `software/moode-dual-output/` (installer + aarch64
+* [x] New package `software/moode-dual-output/` (installer + aarch64
       binaries), mirroring `software/volumio/dual-output/`.
-* [ ] `software/jukebox-pots/` with the backend switch and shared docs.
-* [ ] Update root `README.md`, `skills/jukebox/SKILL.md` (new moOde section
+* [x] `software/jukebox-pots/` with the backend switch and shared docs.
+* [x] Update root `README.md`, `skills/jukebox/SKILL.md` (new moOde section
       or sibling skill) and this plan (results).
-* [ ] Work on branch `moode-port`; `main` only after M8 passes.
+* [x] Work on branch `moode-port`; `main` only after M8 passes.
 
 ---
 

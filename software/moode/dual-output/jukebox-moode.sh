@@ -23,10 +23,21 @@
 #
 # Commands:
 #   sudo ./jukebox-moode.sh install [--second-output usb|none]
-#   sudo ./jukebox-moode.sh verify
+#   sudo ./jukebox-moode.sh verify [--with-playback]
 #   sudo ./jukebox-moode.sh apply       # re-assert (used by the guard unit)
 #   sudo ./jukebox-moode.sh status
 #   sudo ./jukebox-moode.sh uninstall
+#
+# Options:
+#   --second-output usb|none       analyser branch (default: usb)
+#   --tone / --no-tone             bass+treble via CamillaDSP (default: on)
+#   --analyser-trim / --no-analyser-trim   fixed low-shelf on the analyser
+#                                  branch (default: on)
+#   --analyser-freq HZ             shelf corner (default: 60)
+#   --analyser-gain dB             shelf gain (default: -6.02 = half level)
+#   --analyser-q Q                 shelf Q (default: 0.5)
+#   --mpd-buffer US                MPD ALSA buffer (default: 3000000 = 3 s)
+#   --no-patch-cdsp                keep moOde's stock cdsp plugin
 #
 set -euo pipefail
 
@@ -48,6 +59,7 @@ TONE_NAME="jukebox-tone"
 BACKUP_ROOT="/var/backups/jukebox-moode"
 GUARD_SERVICE="/etc/systemd/system/jukebox-moode-guard.service"
 GUARD_PATH="/etc/systemd/system/jukebox-moode-guard.path"
+UDEV_RULE="/etc/udev/rules.d/89-jukebox-moode.rules"
 
 # Tone defaults (same as the Volumio package)
 TONE_ENABLE="${JB_TONE:-on}"
@@ -63,6 +75,20 @@ USB_RATE="${JB_USB_RATE:-48000}"
 CHUNKSIZE="${JB_CHUNKSIZE:-4096}"
 MPD_BUFFER_TIME="${JB_MPD_BUFFER_TIME:-3000000}"   # 3 s, absorbs player stalls
 PLAY_TEST=0
+
+# Analyser bass trim (same design as the Volumio package): a fixed low-shelf
+# on the analyser branch only, to compensate the spectrum analyser's hardware
+# bass over-read. Implemented with CAPS Eq4p via the alsaequal "equal" ALSA
+# plugin (moOde ships both).
+ANALYSER_TRIM="${JB_ANALYSER_TRIM:-on}"          # on | off
+ANALYSER_FREQ_HZ="${JB_ANALYSER_FREQ_HZ:-60}"
+ANALYSER_GAIN_DB="${JB_ANALYSER_GAIN_DB:--6.02}"
+ANALYSER_Q="${JB_ANALYSER_Q:-0.5}"
+EQ_CONTROLS_SRC="$APPLY_DIR/analyser-eq.bin"
+EQ_CONTROLS_DEST="/var/lib/jukebox-moode/analyser-eq.bin"
+EQ_LIBRARY="/usr/lib/ladspa/caps.so"
+EQ_MODULE="Eq4p"
+EQ_CAPS_ID=2608
 
 # Patched cdsp plugin (underrun concealment + atomic config write). moOde
 # ships its own build; this package installs ours when requested. The build
@@ -94,6 +120,21 @@ analyser_available() {
   [ "$SECOND_OUTPUT" = "usb" ] && [ -n "$(card_num "$USB_CARD" 2>/dev/null || true)" ]
 }
 
+# The analyser branch must hit the USB card at full level: the hardware mixer
+# of those cheap cards powers up quite low (29% on our C-Media). The Volumio
+# package has the equivalent step; without it the analyser sees a very weak
+# signal even though everything looks "RUNNING".
+set_analyser_level() {
+  analyser_available || return 0
+  local usbnum
+  usbnum="$(card_num "$USB_CARD" 2>/dev/null || true)"
+  [ -n "$usbnum" ] || return 0
+  amixer -c "$usbnum" sset PCM 100% unmute >/dev/null 2>&1 || true
+  # Persist it too: alsa-restore runs at boot and would put back whatever was
+  # stored in asound.state (often the card's low power-on level).
+  alsactl store "$usbnum" >/dev/null 2>&1 || alsactl store >/dev/null 2>&1 || true
+}
+
 # --------------------------------------------------------------- config file
 
 load_config_env() {
@@ -111,6 +152,10 @@ load_config_env() {
     TONE_MAX_DB="${JB_TONE_MAX_DB:-12}"
     CHUNKSIZE="${JB_CHUNKSIZE:-4096}"
     MPD_BUFFER_TIME="${JB_MPD_BUFFER_TIME:-3000000}"
+    ANALYSER_TRIM="${JB_ANALYSER_TRIM:-on}"
+    ANALYSER_FREQ_HZ="${JB_ANALYSER_FREQ_HZ:-60}"
+    ANALYSER_GAIN_DB="${JB_ANALYSER_GAIN_DB:--6.02}"
+    ANALYSER_Q="${JB_ANALYSER_Q:-0.5}"
   fi
 }
 
@@ -129,6 +174,10 @@ JB_TONE_Q=$TONE_SHELF_Q
 JB_TONE_MAX_DB=$TONE_MAX_DB
 JB_CHUNKSIZE=$CHUNKSIZE
 JB_MPD_BUFFER_TIME=$MPD_BUFFER_TIME
+JB_ANALYSER_TRIM=$ANALYSER_TRIM
+JB_ANALYSER_FREQ_HZ=$ANALYSER_FREQ_HZ
+JB_ANALYSER_GAIN_DB=$ANALYSER_GAIN_DB
+JB_ANALYSER_Q=$ANALYSER_Q
 EOF
   chmod 0644 "$CONFIG_ENV"
 }
@@ -149,9 +198,24 @@ render_split_conf() {
 pcm.jukeboxSplit {
     type            plug
     slave {
-        pcm         "jukeboxSplitRaw"
+        pcm         "jukeboxRoute"
         format      S32_LE
     }
+}
+
+# Expand 2 -> 4 channels and duplicate L/R (rows) before the multi. Without
+# this stage the multi only receives 2 channels, so branch b (bound to
+# channels 2/3) would read silence. Same structure as the Volumio package.
+pcm.jukeboxRoute {
+    type            route
+    slave {
+        pcm         "jukeboxSplitRaw"
+        channels    4
+    }
+    ttable.0.0 1
+    ttable.0.2 1
+    ttable.1.1 1
+    ttable.1.3 1
 }
 
 pcm.jukeboxSplitRaw {
@@ -173,11 +237,103 @@ pcm.jukeboxSplitRaw {
 pcm.jukeboxAnalyser {
     type            plug
     slave {
+        pcm         "jukeboxAnalyserEq"
+        rate        $USB_RATE
+    }
+}
+
+$(render_analyser_eq "jukeboxAnalyserRaw" "$USB_RATE")
+
+pcm.jukeboxAnalyserRaw {
+    type            plug
+    slave {
         pcm         "hw:CARD=$USB_CARD,DEV=0"
         rate        $USB_RATE
     }
 }
 EOF
+}
+
+# Emit the analyser-branch filter block. With the trim on, a CAPS Eq4p
+# low-shelf (via alsaequal) attenuates the deep bass for the analyser only;
+# with it off, a plain plug keeps the branch transparent. Same design as the
+# Volumio package.
+render_analyser_eq() {
+  local target="$1" rate="$2"
+  if [ "$ANALYSER_TRIM" = "on" ]; then
+    cat <<EOF
+# Analyser bass trim: low-shelf ${ANALYSER_FREQ_HZ} Hz ${ANALYSER_GAIN_DB} dB (Q ${ANALYSER_Q}).
+# Fixed via a deterministic controls file; affects this branch only.
+# The wrapper plug pins rate + FLOAT for the 'equal' plugin (which only
+# accepts float); without that the ALSA 'multi' plugin fails to negotiate.
+pcm.jukeboxAnalyserEq {
+    type            plug
+    slave {
+        pcm         "jukeboxAnalyserEqDsp"
+        rate        ${rate:-48000}
+        format      FLOAT_LE
+    }
+}
+
+pcm.jukeboxAnalyserEqDsp {
+    type            equal
+    slave.pcm       "$target"
+    controls        "$EQ_CONTROLS_DEST"
+    library         "$EQ_LIBRARY"
+    module          "$EQ_MODULE"
+    channels        2
+}
+EOF
+  else
+    cat <<EOF
+# Analyser bass trim disabled: transparent pass-through.
+pcm.jukeboxAnalyserEq {
+    type            plug
+    slave.pcm       "$target"
+}
+EOF
+  fi
+}
+
+# Deterministic alsaequal controls file for CAPS Eq4p: band a = low shelf at
+# ANALYSER_FREQ_HZ / ANALYSER_GAIN_DB / ANALYSER_Q, bands b/c/d off.
+# Layout (alsaequal LADSPA_Control): header (4 unsigned longs + 2 ints, so
+# 40 bytes on aarch64 and 24 on armhf), then one 72-byte record per control
+# port {int32 index; float data[16]; int32 type}, then a trailing float[16]
+# per port. Kept byte-stable so the file is identical every install.
+write_analyser_eq_controls() {
+  python3 - "$1" "$ANALYSER_FREQ_HZ" "$ANALYSER_GAIN_DB" "$ANALYSER_Q" "$EQ_CAPS_ID" <<'PY'
+import struct, sys
+path, f, gain, q, uid = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4]), int(sys.argv[5])
+channels = 2
+spec = [(0, 0.0, 0), (1, f, 0), (2, q, 0), (3, gain, 0),          # a: low shelf
+        (4, -1.0, 0), (5, 529.161, 0), (6, 0.5, 0), (7, 0.0, 0),  # b: off
+        (8, -1.0, 0), (9, 529.161, 0), (10, 0.25, 0), (11, 0.0, 0),  # c: off
+        (12, -1.0, 0), (13, 2721.776, 0), (14, 0.25, 0), (15, 0.0, 0),  # d: off
+        (16, 3.0, 1)]                                             # _latency (out)
+body = bytearray()
+for idx, val, typ in spec:
+    rec = bytearray(72)
+    struct.pack_into('<i', rec, 0, idx)
+    for c in range(channels):
+        struct.pack_into('<f', rec, 4 + c * 4, val)
+    struct.pack_into('<i', rec, 68, typ)
+    body += rec
+tail = bytearray()
+for idx, val, typ in spec:
+    for c in range(channels):
+        tail += struct.pack('<f', val)
+# LADSPA_Control uses C 'unsigned long' fields: 8 bytes on 64-bit (aarch64),
+# 4 on 32-bit (armhf). The header size must match the running alsaequal.
+if struct.calcsize('P') == 8:
+    hdr_size, hdr_fmt = 40, '<4Q2i'
+else:
+    hdr_size, hdr_fmt = 24, '<6I'
+length = hdr_size + len(body) + len(tail)
+hdr = struct.pack(hdr_fmt, length, uid, channels, len(spec), 17, 18)
+open(path, 'wb').write(hdr + bytes(body) + bytes(tail))
+print("wrote %s (%d bytes)" % (path, length))
+PY
 }
 
 # Point moOde's _audioout at the jukebox chain. moOde rewrites this line
@@ -320,6 +476,10 @@ enable_volume_sync() {
 
 # ------------------------------------------------------------------ install
 
+# Set to 1 by apply_all when the live chain changed (split <-> DAC-only), so
+# MPD is restarted once to re-open the new chain.
+CHAIN_CHANGED=0
+
 apply_all() {
   load_config_env
   if [ "${TONE_ENABLE:-on}" = "on" ]; then
@@ -334,15 +494,39 @@ apply_all() {
       ln -sfn "$TONE_CONFIG" "$CAMILLA_WORKING"
     fi
   fi
+
+  local prev=""
+  if [ -f "$AUDIOOUT_CONF" ]; then
+    prev="$(grep -m1 '^slave.pcm' "$AUDIOOUT_CONF" | sed 's/.*"\(.*\)".*/\1/')"
+  fi
+
   if analyser_available; then
     render_split_conf >"$SPLIT_CONF"
     chmod 0644 "$SPLIT_CONF"
     point_audioout split
+    set_analyser_level
+    # Analyser bass trim controls file (deterministic; must stay writable by
+    # whoever opens the chain).
+    if [ "${ANALYSER_TRIM:-on}" = "on" ]; then
+      mkdir -p "$(dirname "$EQ_CONTROLS_DEST")"
+      if [ ! -f "$EQ_CONTROLS_SRC" ] || ! cmp -s "$EQ_CONTROLS_SRC" "$EQ_CONTROLS_DEST" 2>/dev/null; then
+        write_analyser_eq_controls "$EQ_CONTROLS_SRC" >/dev/null 2>&1 || true
+        install -m 0666 "$EQ_CONTROLS_SRC" "$EQ_CONTROLS_DEST" 2>/dev/null || true
+      fi
+    fi
     log "apply: split chain (DAC + USB analyser)"
   else
     rm -f "$SPLIT_CONF"
     point_audioout tone
     log "apply: DAC-only chain (analyser card not present)"
+  fi
+
+  local now=""
+  if [ -f "$AUDIOOUT_CONF" ]; then
+    now="$(grep -m1 '^slave.pcm' "$AUDIOOUT_CONF" | sed 's/.*"\(.*\)".*/\1/')"
+  fi
+  if [ "$prev" != "$now" ]; then
+    CHAIN_CHANGED=1
   fi
   ensure_mpd_running
 }
@@ -351,7 +535,8 @@ install_units() {
   cat >"$GUARD_SERVICE" <<EOF
 [Unit]
 Description=Jukebox moOde audio guard (re-assert configuration)
-After=mpd.service
+After=mpd.service alsa-restore.service
+Wants=alsa-restore.service
 
 [Service]
 Type=oneshot
@@ -372,15 +557,25 @@ PathChanged=$CAMILLA_WORKING
 [Install]
 WantedBy=multi-user.target
 EOF
+  # USB sound card hotplug: re-evaluate the chain (split <-> DAC-only) and
+  # restart MPD only when the live chain actually changed.
+  cat >"$UDEV_RULE" <<EOF
+# Jukebox: re-evaluate the analyser branch when the USB sound card appears.
+ACTION=="add", SUBSYSTEM=="sound", KERNEL=="card*", RUN+="/usr/bin/systemctl --no-block start jukebox-moode-guard.service"
+ACTION=="remove", SUBSYSTEM=="sound", KERNEL=="card*", RUN+="/usr/bin/systemctl --no-block start jukebox-moode-guard.service"
+EOF
   systemctl daemon-reload
+  udevadm control --reload-rules >/dev/null 2>&1 || true
+  systemctl enable jukebox-moode-guard.service >/dev/null 2>&1 || true
   systemctl enable --now jukebox-moode-guard.path >/dev/null 2>&1 || true
 }
 
 remove_units() {
   systemctl disable --now jukebox-moode-guard.path >/dev/null 2>&1 || true
   systemctl disable --now jukebox-moode-guard.service >/dev/null 2>&1 || true
-  rm -f "$GUARD_PATH" "$GUARD_SERVICE"
+  rm -f "$GUARD_PATH" "$GUARD_SERVICE" "$UDEV_RULE"
   systemctl daemon-reload
+  udevadm control --reload-rules >/dev/null 2>&1 || true
 }
 
 backup_config() {
@@ -475,6 +670,18 @@ cmd_apply() {
   require_root
   [ -d "$APPLY_DIR" ] || { log "apply: not installed"; exit 0; }
   apply_all
+  if [ "${CHAIN_CHANGED:-0}" = "1" ] && systemctl is-active --quiet mpd; then
+    # The live ALSA chain changed (split <-> DAC-only): MPD must re-open it.
+    # Pause-then-play keeps the queue position.
+    local was_playing=""
+    mpc status 2>/dev/null | grep -q '\[playing\]' && was_playing=1
+    systemctl restart mpd >/dev/null 2>&1 || true
+    sleep 2
+    if [ -n "$was_playing" ]; then
+      mpc play >/dev/null 2>&1 || true
+    fi
+    log "apply: chain changed; MPD restarted${was_playing:+ (resumed)}"
+  fi
 }
 
 cmd_verify() {
@@ -525,14 +732,75 @@ cmd_verify() {
     fi
   fi
 
+  if analyser_available; then
+    local usbnum lvl
+    usbnum="$(card_num "$USB_CARD" 2>/dev/null || true)"
+    lvl="$(amixer -c "$usbnum" sget PCM 2>/dev/null | grep -m1 'Front Left:' | grep -oE '\[[0-9]+%\]' | tr -d '[]%')"
+    case "$lvl" in
+      ""|100) ok "analyser card level is full (PCM ${lvl:-n/a})" ;;
+      *) fail "analyser card PCM is at ${lvl}% (should be 100%)"; rc=$((rc+1)) ;;
+    esac
+  fi
+
   if command -v aplay >/dev/null 2>&1 && aplay -L 2>/dev/null | grep -qx jukeboxSplit; then
     ok "ALSA sees the jukeboxSplit PCM"
   elif [ "$want" = "jukeboxSplit" ]; then
     fail "ALSA does not expose jukeboxSplit"; rc=$((rc+1))
   fi
 
+  if [ "$PLAY_TEST" = "1" ]; then
+    if playback_test; then
+      ok "chain opens with playback (DAC + analyser)"
+    else
+      fail "playback test failed (see $LOG_FILE)"; rc=$((rc+1))
+    fi
+  fi
+
   [ $rc -eq 0 ] && say "All checks passed" || say "Checks failed: $rc"
   return $rc
+}
+
+# Play a short deterministic WAV through the live chain (like the Volumio
+# package) and confirm the involved PCMs reach RUNNING. Skipped while MPD is
+# playing so a verify never interrupts the user.
+playback_test() {
+  local dev dacnum usbnum wav ok_dac=0 ok_usb=0
+  dacnum="$(card_num "$DAC_CARD" 2>/dev/null || true)"
+  usbnum="$(card_num "$USB_CARD" 2>/dev/null || true)"
+  [ -n "$dacnum" ] || return 1
+  if mpc status 2>/dev/null | grep -q '\[playing\]'; then
+    log "playback test: skipped (MPD is playing)"
+    return 0
+  fi
+  wav="$(mktemp /tmp/jukebox-moode-test.XXXXXX.wav)"
+  python3 - "$wav" <<'PY'
+import struct, sys, wave
+p = sys.argv[1]
+with wave.open(p, "wb") as w:
+    w.setnchannels(2); w.setsampwidth(2); w.setframerate(44100)
+    n = 44100 * 3
+    w.writeframes(struct.pack("<%dh" % (n * 2), *([4000, -4000] * n)))
+PY
+  aplay -q -D jukeboxSplit "$wav" >/dev/null 2>&1 &
+  local pid=$!
+  local i=0
+  while [ "$i" -lt 20 ]; do
+    sleep 0.25
+    [ "$(head -1 /proc/asound/card$dacnum/pcm0p/sub0/status 2>/dev/null)" = "state: RUNNING" ] && ok_dac=1
+    if [ -n "$usbnum" ]; then
+      [ "$(head -1 /proc/asound/card$usbnum/pcm0p/sub0/status 2>/dev/null)" = "state: RUNNING" ] && ok_usb=1
+    fi
+    [ "$ok_dac" = 1 ] && { [ -z "$usbnum" ] || [ "$ok_usb" = 1 ]; } && break
+    i=$((i + 1))
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  rm -f "$wav"
+  [ "$ok_dac" = 1 ] || { log "playback test: DAC PCM never reached RUNNING"; return 1; }
+  if [ -n "$usbnum" ]; then
+    [ "$ok_usb" = 1 ] || { log "playback test: USB PCM never reached RUNNING"; return 1; }
+  fi
+  return 0
 }
 
 cmd_status() {
@@ -549,16 +817,32 @@ cmd_uninstall() {
   require_root
   say "Uninstalling jukebox moOde dual output"
   remove_units
+
+  # Restore the moOde values the install changed. Prefer the pre-install DB
+  # backup; fall back to moOde-ish defaults when it is not available.
+  local bdb="$BACKUP_ROOT/latest/moode-sqlite3.db"
+  local camilla="off" sync="off" mpdmixer="software" mixer="software" buffer="500000"
+  if [ -f "$bdb" ]; then
+    camilla="$(sqlite3 "$bdb" "SELECT value FROM cfg_system WHERE param='camilladsp';" 2>/dev/null || echo off)"
+    sync="$(sqlite3 "$bdb" "SELECT value FROM cfg_system WHERE param='camilladsp_volume_sync';" 2>/dev/null || echo off)"
+    mpdmixer="$(sqlite3 "$bdb" "SELECT value FROM cfg_system WHERE param='mpdmixer';" 2>/dev/null || echo software)"
+    mixer="$(sqlite3 "$bdb" "SELECT value FROM cfg_mpd WHERE param='mixer_type';" 2>/dev/null || echo software)"
+    buffer="$(sqlite3 "$bdb" "SELECT value FROM cfg_mpd WHERE param='buffer_time';" 2>/dev/null || echo 500000)"
+  fi
+  sqlite3 "$MOODE_DB" "UPDATE cfg_system SET value='$camilla' WHERE param='camilladsp';"
+  sqlite3 "$MOODE_DB" "UPDATE cfg_system SET value='$sync' WHERE param='camilladsp_volume_sync';"
+  sqlite3 "$MOODE_DB" "UPDATE cfg_system SET value='$mpdmixer' WHERE param='mpdmixer';"
+  sqlite3 "$MOODE_DB" "UPDATE cfg_system SET value='$mpdmixer' WHERE param='mpdmixer_local';"
+  sqlite3 "$MOODE_DB" "UPDATE cfg_mpd SET value='$mixer' WHERE param='mixer_type';"
+  sqlite3 "$MOODE_DB" "UPDATE cfg_mpd SET value='$buffer' WHERE param='buffer_time';"
+
   # Hand the output config back to moOde: its own code writes the right
-  # slave.pcm for the current output device / DSP selection.
+  # slave.pcm for the restored DSP selection.
   if [ -x "$APPLY_DIR/moode-sync.php" ]; then
     php "$APPLY_DIR/moode-sync.php" --restore >>"$LOG_FILE" 2>&1 || restore_audioout
+    JB_MPD_BUFFER_TIME="$buffer" php "$APPLY_DIR/moode-sync.php" >>"$LOG_FILE" 2>&1 || true
   else
     restore_audioout
-  fi
-  if [ "$(sqlite3 "$MOODE_DB" "SELECT value FROM cfg_system WHERE param='camilladsp';" 2>/dev/null || true)" = "$TONE_NAME.yml" ]; then
-    ln -sfn "$CAMILLA_CONFIGS/V4-Flat.yml" "$CAMILLA_WORKING" 2>/dev/null || true
-    sqlite3 "$MOODE_DB" "UPDATE cfg_system SET value='V4-Flat.yml' WHERE param='camilladsp';" 2>/dev/null || true
   fi
   rm -f "$SPLIT_CONF" "$TONE_CONFIG"
   rm -rf "$APPLY_DIR"
@@ -576,6 +860,17 @@ main() {
       --second-output) SECOND_OUTPUT="$2"; shift 2 ;;
       --no-tone) TONE_ENABLE=off; shift ;;
       --tone) TONE_ENABLE=on; shift ;;
+      --analyser-trim) ANALYSER_TRIM=on; shift ;;
+      --no-analyser-trim) ANALYSER_TRIM=off; shift ;;
+      --analyser-freq) ANALYSER_FREQ_HZ="$2"; shift 2 ;;
+      --analyser-freq=*) ANALYSER_FREQ_HZ="${1#*=}"; shift ;;
+      --analyser-gain) ANALYSER_GAIN_DB="$2"; shift 2 ;;
+      --analyser-gain=*) ANALYSER_GAIN_DB="${1#*=}"; shift ;;
+      --analyser-q) ANALYSER_Q="$2"; shift 2 ;;
+      --analyser-q=*) ANALYSER_Q="${1#*=}"; shift ;;
+      --mpd-buffer) MPD_BUFFER_TIME="$2"; shift 2 ;;
+      --mpd-buffer=*) MPD_BUFFER_TIME="${1#*=}"; shift ;;
+      --no-patch-cdsp) PATCH_CDSP=off; shift ;;
       -h|--help) usage; exit 0 ;;
       install|verify|apply|status|uninstall) mode="$1"; shift ;;
       *) die "unknown option: $1 (see --help)" ;;
