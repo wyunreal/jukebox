@@ -188,14 +188,20 @@ point_audioout() { # point_audioout split|tone
   local target
   if [ "$1" = "split" ]; then target="jukeboxSplit"; else target="camilladsp"; fi
   if grep -q "^slave.pcm \"$target\"" "$AUDIOOUT_CONF"; then
+    chmod 0644 "$AUDIOOUT_CONF"
     return 0
   fi
   sed -i "s/^slave.pcm.*/slave.pcm \"$target\"/" "$AUDIOOUT_CONF"
+  # ALSA confs under /etc/alsa/conf.d must stay readable by mpd/other users;
+  # a redirect during testing must never leave them 0600.
+  chmod 0644 "$AUDIOOUT_CONF"
+  [ -f "$SPLIT_CONF" ] && chmod 0644 "$SPLIT_CONF"
 }
 
 restore_audioout() {
   [ -f "$AUDIOOUT_CONF" ] || return 0
   sed -i 's/^slave.pcm.*/slave.pcm "peppy"/' "$AUDIOOUT_CONF"
+  chmod 0644 "$AUDIOOUT_CONF"
 }
 
 # ------------------------------------------------------- CamillaDSP tone config
@@ -316,10 +322,17 @@ enable_volume_sync() {
 
 apply_all() {
   load_config_env
-  if [ "${TONE_ENABLE:-on}" = "on" ] && [ ! -f "$TONE_CONFIG" ]; then
-    # Only create it when missing: re-rendering would reset the live tone and
-    # balance gains jukebox-pots has written.
-    install_tone_config
+  if [ "${TONE_ENABLE:-on}" = "on" ]; then
+    # Ensure the tone config exists and is complete. If moOde regenerated it
+    # from its template (no shelves) or it is missing, render ours while
+    # preserving whatever tone/balance gains were already set.
+    if ! grep -q 'Lowshelf' "$TONE_CONFIG" 2>/dev/null; then
+      install_tone_config
+    fi
+    # moOde may have re-pointed working_config.yml at another config.
+    if [ "$(readlink -f "$CAMILLA_WORKING" 2>/dev/null)" != "$TONE_CONFIG" ]; then
+      ln -sfn "$TONE_CONFIG" "$CAMILLA_WORKING"
+    fi
   fi
   if analyser_available; then
     render_split_conf >"$SPLIT_CONF"
@@ -536,18 +549,20 @@ cmd_uninstall() {
   require_root
   say "Uninstalling jukebox moOde dual output"
   remove_units
-  restore_audioout
+  # Hand the output config back to moOde: its own code writes the right
+  # slave.pcm for the current output device / DSP selection.
+  if [ -x "$APPLY_DIR/moode-sync.php" ]; then
+    php "$APPLY_DIR/moode-sync.php" --restore >>"$LOG_FILE" 2>&1 || restore_audioout
+  else
+    restore_audioout
+  fi
   if [ "$(sqlite3 "$MOODE_DB" "SELECT value FROM cfg_system WHERE param='camilladsp';" 2>/dev/null || true)" = "$TONE_NAME.yml" ]; then
     ln -sfn "$CAMILLA_CONFIGS/V4-Flat.yml" "$CAMILLA_WORKING" 2>/dev/null || true
     sqlite3 "$MOODE_DB" "UPDATE cfg_system SET value='V4-Flat.yml' WHERE param='camilladsp';" 2>/dev/null || true
   fi
-  if [ -d "$BACKUP_ROOT/latest" ]; then
-    [ -f "$BACKUP_ROOT/latest/_audioout.conf" ] && cp -a "$BACKUP_ROOT/latest/_audioout.conf" "$AUDIOOUT_CONF"
-    ok "moOde files restored from backup"
-  fi
-  rm -f "$SPLIT_CONF"
+  rm -f "$SPLIT_CONF" "$TONE_CONFIG"
   rm -rf "$APPLY_DIR"
-  ok "uninstalled (reboot recommended)"
+  ok "uninstalled (moOde config restored; reboot recommended)"
 }
 
 usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }

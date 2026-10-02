@@ -31,6 +31,14 @@ foreach (sqlRead('cfg_system', $dbh) as $row) {
     }
 }
 
+// Restore mode: moOde regenerates its own output configs (used on uninstall).
+if (in_array('--restore', $argv ?? [])) {
+    updAudioOutAndBtOutConfs($_SESSION['cardnum'], $_SESSION['alsa_output_mode']);
+    updPeppyConfs($_SESSION['cardnum'], $_SESSION['alsa_output_mode']);
+    echo "moOde ALSA output configs restored from its own settings\n";
+    exit(0);
+}
+
 // 1. ALSA buffer (moOde only writes it when != 500000)
 sqlUpdate('cfg_mpd', $dbh, 'buffer_time', $bufferTime);
 $_SESSION['buffer_time'] = $bufferTime;
