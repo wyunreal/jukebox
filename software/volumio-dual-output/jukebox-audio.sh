@@ -1036,7 +1036,7 @@ try:
         d = {}
 except Exception:
     d = {}
-want = ['mixer_type "none"', 'buffer_time "200000"', 'period_time "50000"']
+want = ['mixer_type "none"', 'buffer_time "3000000"', 'period_time "50000"']
 if d.get(label) != want:
     d[label] = want
     with open(special_path, "w") as fh:

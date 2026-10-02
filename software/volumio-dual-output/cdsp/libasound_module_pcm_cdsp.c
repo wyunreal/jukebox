@@ -156,6 +156,11 @@ typedef struct {
   // ALSA operates on frames, we on bytes
   size_t frame_size;
 
+  // Zeroed, period-sized buffer used to conceal application underruns
+  // instead of reporting a fatal XRUN to the player (see io_thread).
+  char *silence_buffer;
+  size_t silence_size;
+
   struct timespec delay_ts;
   snd_pcm_uframes_t delay_hw_ptr;
   unsigned int delay_pcm_nread;
@@ -290,11 +295,32 @@ static void io_thread_update_delay(cdsp_t *pcm, snd_pcm_uframes_t hw_ptr) {
 
 }
 
+// Feed one period of silence to CamillaDSP. Used when the application
+// underruns: keep the pipeline running instead of reporting a fatal XRUN.
+static int write_silence(cdsp_t *pcm) {
+  if (!pcm->silence_buffer || pcm->silence_size == 0)
+    return 0;
+  char *head = pcm->silence_buffer;
+  size_t len = pcm->silence_size;
+  ssize_t ret;
+  do {
+    if ((ret = write(pcm->cdsp_pcm_fd, head, len)) == -1) {
+      if (errno == EINTR)
+        continue;
+      return -errno;
+    }
+    head += ret;
+    len -= (size_t)ret;
+  } while (len != 0);
+  return 0;
+}
+
 // IO thread, which facilitates ring buffer.
 static void *io_thread(snd_pcm_ioplug_t *io) {
   cdsp_t *pcm = io->private_data;
   pthread_cleanup_push(PTHREAD_CLEANUP(io_thread_cleanup), pcm);
   int xrun = 0;
+  int silence_warned = 0;
 
   sigset_t sigset;
   sigemptyset(&sigset);
@@ -379,19 +405,27 @@ static void *io_thread(snd_pcm_ioplug_t *io) {
         nanosleep(&ts, NULL);
         xrun++;
         if(xrun > 4) {
-          // We've gone longer than a period with no data.
-          // The player isn't providing data fast enough.
-          error("XRUN OCCURRED!\n");
-          // Signal XRUN to the ioplug code
-          pcm->io_status = -1;
-          io_thread_update_delay(pcm, 0);
-          eventfd_write(pcm->event_fd, 1);
+          // The application has not provided data for more than a period.
+          // Do NOT report an XRUN here: most players treat it as fatal and
+          // close the output, turning a temporary stall (slow storage, load
+          // spike) into a "failed to open output device" that takes ages to
+          // recover. Feed CamillaDSP silence instead, so the pipeline stays
+          // alive and audio continues as soon as data arrives again.
+          if(!silence_warned) {
+            warn("Application underrun, feeding silence until data returns\n");
+            silence_warned = 1;
+          }
+          if(io->state == SND_PCM_STATE_RUNNING) {
+            if(write_silence(pcm) != 0)
+              goto fail;
+          }
         }
         continue;
       }
     }
     // Data available - reset the xrun counter
     xrun = 0;
+    silence_warned = 0;
     pcm->io_status = 0;
 
     // current offset of the head pointer in the IO buffer
@@ -805,6 +839,8 @@ static void free_cdsp(cdsp_t **pcm) {
     free((void *)(*pcm)->start_cmd);
   if((*pcm)->camilla_exit_cmd)
     free((void *)(*pcm)->camilla_exit_cmd);
+  if((*pcm)->silence_buffer)
+    free((void *)(*pcm)->silence_buffer);
   pthread_mutex_destroy(&(*pcm)->mutex);
   pthread_cond_destroy(&(*pcm)->pause_cond);
   free((void *)*pcm);
@@ -823,6 +859,18 @@ static int cdsp_hw_params(snd_pcm_ioplug_t *io, snd_pcm_hw_params_t *params __at
       snd_pcm_format_name(io->format), io->rate, io->channels);
 
   pcm->frame_size = (snd_pcm_format_physical_width(io->format)*io->channels)/8;
+
+  // (Re)allocate the silence buffer used to conceal application underruns.
+  if(pcm->silence_buffer)
+    free(pcm->silence_buffer);
+  pcm->silence_buffer = NULL;
+  pcm->silence_size = 0;
+  size_t silence_bytes = (size_t)io->period_size * pcm->frame_size;
+  pcm->silence_buffer = calloc(1, silence_bytes);
+  if(pcm->silence_buffer)
+    pcm->silence_size = silence_bytes;
+  else
+    SNDERR("Could not allocate silence buffer (%zu bytes)\n", silence_bytes);
 
   // Start CamillaDSP in a forked process
   start_camilla(pcm);

@@ -142,12 +142,17 @@ with the ALSA `cdsp` plugin:
   `strrep.h`). It is shipped precompiled for armhf; rebuild it on the host
   with `JB_TONE_BUILD_CDSP=1 ./jukebox-audio.sh install` (needs `gcc` and
   `libasound2-dev`), or cross-compile with
-  `arm-linux-gnueabihf-gcc -DPIC -std=gnu11 -O2 -fPIC -shared`.
-  Three fixes over upstream are included: exec argument lifetime (the `-f/-r/-n`
-  flags used to arrive empty), CamillaDSP v4 sample-format names, and an atomic
+  `arm-linux-gnueabihf-gcc -DPIC -std=gnu11 -O2 -fPIC -shared` (a
+  `debian:bookworm` container with `gcc-arm-linux-gnueabihf` plus
+  `libasound2-dev:armhf` via multiarch works too).
+  Four fixes over upstream are included: exec argument lifetime (the `-f/-r/-n`
+  flags used to arrive empty), CamillaDSP v4 sample-format names, an atomic
   active-config write (temp file + `rename`, forced mode `0666`) so the file
   stays writable whichever user opened the chain last (root at install time,
-  `mpd` during playback).
+  `mpd` during playback), and underrun concealment: when the application stops
+  feeding for more than a period the plugin feeds CamillaDSP silence instead
+  of reporting a fatal XRUN, so a temporary player stall (slow storage, system
+  load) cannot kill the output.
 * `CamillaDSP` (v4.1.3, `camilladsp-linux-armv7.tar.gz`) is shipped as
   `camilladsp` and installed to `/usr/local/bin/`.
 
@@ -210,7 +215,10 @@ live one is selected automatically. `JB_USB_OVERRIDE=on|off` (or
   themselves are owned by `jukebox-pots` (see that package).
 * The `multi` chain needs `buffer_time`/`period_time` in MPD (installed via
   Volumio's `special_cards_config.json`); without them MPD may refuse to
-  open the chain.
+  open the chain. The buffer is deliberately large (`3000000` us = 3 s,
+  period `50000` us): it absorbs player stalls (slow SD card, load spikes)
+  so the DAC branch never starves. Even longer stalls are concealed by the
+  plugin's silence feed (see above).
 * `/var/lib/jukebox-audio` is kept world-writable (`0777`): MPD's `cdsp`
   plugin (unprivileged) rewrites CamillaDSP's active config there on every
   open, and `jukebox-pots` edits it too. The active config itself is written
