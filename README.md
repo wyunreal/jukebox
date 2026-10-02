@@ -42,12 +42,16 @@ software/volumio/              # Volumio flavour (the live box)
 └── ui-boost/                   # touch UI performance kit for Volumio
 
 software/moode/                 # moOde flavour (second SD, 64-bit)
-└── dual-output/                # dual output + tone on moOde 10
-    ├── jukebox-moode.sh        # installer / verify / status (runs on the Pi)
-    ├── moode-sync.php          # regenerate mpd.conf with buffer via moOde code
-    ├── deploy.sh               # ship and run the installer over SSH
-    ├── cdsp/                   # patched plugin source (built natively, aarch64)
-    └── README.md               # design doc: split, tone/balance, volume type
+├── dual-output/                # dual output + tone on moOde 10
+│   ├── jukebox-moode.sh        # installer / verify / status (runs on the Pi)
+│   ├── moode-sync.php          # regenerate mpd.conf with buffer via moOde code
+│   ├── deploy.sh               # ship and run the installer over SSH
+│   ├── cdsp/                   # patched plugin source (built natively, aarch64)
+│   └── README.md               # design doc: split, tone/balance, volume type
+└── ui-menus/                   # make the WebUI menus follow the Font size setting
+    ├── jukebox-menu-font.sh    # installer / verify / status + guard target
+    ├── deploy.sh               # ship and run it over SSH
+    └── README.md               # design doc: why menus don't scale on their own
 
 software/jukebox-pots/          # pot volume/balance/tone from the Arduino
 ├── jukebox-pots.py             # daemon: USB serial -> DAC volume/balance/tone
@@ -232,7 +236,13 @@ help.
 
 5. *(Optional)* Touch UI: the Waveshare DSI panel and touch already work on
    moOde; use moOde's own **Font size** (Preferences → Appearance) for
-   readability. Nothing from `software/volumio/ui-boost` applies here.
+   readability. The menus do **not** follow that setting out of the box (only
+   the page body does) — to fix that and make them larger:
+
+   ```sh
+   cd software/moode/ui-menus
+   ./deploy.sh --host moode@<host> install --scale 1.35
+   ```
 
 6. **Reboot**, then play something and move the four pots.
 
@@ -264,6 +274,7 @@ ssh moode@<host> 'sudo rm -rf /usr/local/jukebox-* /var/lib/jukebox-* \
 | `software/volumio/dual-output` | ALSA split + CamillaDSP tone step + guards + MPD buffers for Volumio |
 | `software/moode/dual-output` | ALSA `_audioout` split + `jukebox-tone` CamillaDSP config + analyser gain + guards + patched `cdsp` for moOde |
 | `software/jukebox-pots` | `jukebox-pots.service` (volume/balance/tone from the Arduino, both platforms) |
+| `software/moode/ui-menus` | moOde-only: menu text follows the Font size setting (scaled xN) |
 | `software/volumio/ui-boost` | Volumio-only touch UI performance fixes |
 
 ## Safety notice
