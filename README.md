@@ -30,17 +30,27 @@ hardware/3d-models/             # FreeCAD models, grouped by part
 ├── screen/                     # screen supports, cover and joints
 └── Spectrum/                   # spectrum display frame
 
-software/volumio/dual-output/   # custom dual audio output for Volumio
-├── jukebox-audio.sh            # installer / verify / status (runs on the Pi)
-├── deploy.sh                   # ship and run the installer over SSH
-├── camilladsp                  # CamillaDSP v4.1.3 (armv7), tone-control engine
-├── libasound_module_pcm_cdsp.so# cdsp ALSA plugin (armhf)
-├── cdsp/                       # plugin source (patched) + strrep.h
-└── README.md                   # design doc: ALSA split, tone, variants, fail-safe
+software/volumio/              # Volumio flavour (the live box)
+├── dual-output/                # custom dual audio output for Volumio
+│   ├── jukebox-audio.sh        # installer / verify / status (runs on the Pi)
+│   ├── deploy.sh               # ship and run the installer over SSH
+│   ├── camilladsp              # CamillaDSP v4.1.3 (armv7), tone-control engine
+│   ├── libasound_module_pcm_cdsp.so  # cdsp ALSA plugin (armhf, patched)
+│   ├── cdsp/                   # plugin source (patched) + strrep.h
+│   └── README.md               # design doc: ALSA split, tone, variants, fail-safe
+└── ui-boost/                   # touch UI performance kit for Volumio
+
+software/moode/                 # moOde flavour (second SD, 64-bit)
+└── dual-output/                # dual output + tone on moOde 10
+    ├── jukebox-moode.sh        # installer / verify / status (runs on the Pi)
+    ├── moode-sync.php          # regenerate mpd.conf with buffer via moOde code
+    ├── deploy.sh               # ship and run the installer over SSH
+    ├── cdsp/                   # patched plugin source (built natively, aarch64)
+    └── README.md               # design doc: split, tone/balance, volume type
 
 software/jukebox-pots/          # pot volume/balance/tone from the Arduino
 ├── jukebox-pots.py             # daemon: USB serial -> DAC volume/balance/tone
-├── install.sh                  # idempotent installer (runs on the Pi)
+├── install.sh                  # idempotent installer (Volumio or moOde)
 ├── deploy.sh                   # ship and run the installer over SSH
 └── README.md                   # design doc: mapping, detection, analyser safety
 

@@ -89,6 +89,22 @@ TONE_VARIANTS = ("usb", "hdmi", "jack", "daconly")
 # CamillaDSP is (re)started by the cdsp plugin; we locate it to reload it.
 CAMILLA_PROC = _env("JP_CAMILLA_PROC", "camilladsp")
 
+# --- platform backend --------------------------------------------------------
+# "volumio": volume through the Volumio API, balance through the SoftMaster
+#            mixer (the Volumio chain puts a softvol element on the DAC branch).
+# "moode":   volume through moOde's vol.sh (volume type "CamillaDSP", so the
+#            fader lives inside CamillaDSP and only the DAC branch is affected)
+#            and balance as per-channel gain filters in the CamillaDSP config.
+# "auto": pick moOde when /var/www/util/vol.sh exists, else Volumio.
+BACKEND = _env("JP_BACKEND", "auto")
+MOODE_VOLSH = _env("JP_MOODE_VOLSH", "/var/www/util/vol.sh")
+MOODE_TONE_CONFIG = _env("JP_MOODE_TONE_CONFIG", "/usr/share/camilladsp/configs/jukebox-tone.yml")
+# Attenuation applied to the opposite channel at full pan (dB, 0 == min).
+BALANCE_MAX_DB = _env_int("JP_BALANCE_MAX_DB", 60)
+
+if BACKEND == "auto":
+    BACKEND = "moode" if os.path.exists(MOODE_VOLSH) else "volumio"
+
 # Arduino Micro (official + Arduino LLC/SA USB ids) and clones that identify
 # themselves by product string.  Used only to pick the right ttyACM/ttyUSB.
 ARDUINO_VID_PID = {
@@ -331,9 +347,9 @@ def ensure_softmaster() -> bool:
 
 
 def set_volume(percent: int) -> bool:
-    """Set the Volumio volume, falling back to a direct mixer write."""
+    """Set the DAC volume: Volumio API, moOde vol.sh, or a direct mixer write."""
     percent = int(clamp(percent, 0, VOLUME_MAX))
-    if USE_API:
+    if USE_API and BACKEND == "volumio":
         url = "http://%s/api/v1/commands/?cmd=volume&volume=%d" % (VOLUMIO, percent)
         try:
             with urllib.request.urlopen(url, timeout=3) as resp:
@@ -341,9 +357,27 @@ def set_volume(percent: int) -> bool:
             return True
         except Exception:
             pass  # fall through to the direct write
+    if USE_API and BACKEND == "moode":
+        try:
+            proc = subprocess.run([MOODE_VOLSH, str(percent)], capture_output=True,
+                                  text=True, timeout=5)
+            if proc.returncode == 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            pass
+        # fall through to the direct write (only meaningful on Volumio chains)
     lo, hi = softmaster_range()
     raw = int(round((percent - 0) / float(VOLUME_MAX) * (hi - lo) + lo))
     return write_softmaster(raw, raw)
+
+
+def balance_db_lr(pan: float, max_db: int = BALANCE_MAX_DB) -> tuple[float, float]:
+    """Pan in [-1,+1] -> per-channel gain in dB (attenuate the far channel)."""
+    if pan > 0:                      # pan right -> attenuate left
+        return -max_db * pan, 0.0
+    if pan < 0:                      # pan left -> attenuate right
+        return 0.0, max_db * pan
+    return 0.0, 0.0
 
 
 # ---------------------------------------------------------------------- tone
@@ -390,8 +424,17 @@ class ToneControl:
             r"(type:\s*%s\b(?:[^\n]*\n)*?[^\n]*?gain:\s*)([-+]?[0-9]*\.?[0-9]+)"
             % type_re)
         new_text, n = pattern.subn(lambda m: m.group(1) + ("%.2f" % value), text)
-        if n == 0 or new_text == text:
-            return n > 0
+        return ToneControl._write_if_changed(path, text, new_text, n)
+
+    @staticmethod
+    def _commit(path: str, new_text: str) -> bool:
+        """Atomic write preserving mode/ownership; True when it changed."""
+        try:
+            with open(path) as fh:
+                if fh.read() == new_text:
+                    return True
+        except OSError:
+            return False
         try:
             st = os.stat(path)
             tmp = path + ".tmp"
@@ -407,6 +450,48 @@ class ToneControl:
             return False
         return True
 
+    @staticmethod
+    def _rewrite(path: str, which: str, value: float) -> bool:
+        """Set the gain of the low/high shelf in a CamillaDSP config.
+
+        Locates the filter by its biquad type (Lowshelf/Highshelf) so it does
+        not depend on any comment marker, and keeps the file's mode/ownership
+        so MPD's cdsp plugin can keep rewriting it.
+        """
+        try:
+            with open(path) as fh:
+                text = fh.read()
+        except OSError:
+            return False
+        type_re = "Lowshelf" if which == "bass" else "Highshelf"
+        # Match the filter block of the requested type and replace its gain.
+        pattern = re.compile(
+            r"(type:\s*%s\b(?:[^\n]*\n)*?[^\n]*?gain:\s*)([-+]?[0-9]*\.?[0-9]+)"
+            % type_re)
+        new_text, n = pattern.subn(lambda m: m.group(1) + ("%.2f" % value), text)
+        if n == 0:
+            return False
+        return ToneControl._commit(path, new_text)
+
+    @staticmethod
+    def _rewrite_balance(path: str, left_db: float, right_db: float) -> bool:
+        """Set the gain of the balance_l / balance_r filters (moOde config)."""
+        try:
+            with open(path) as fh:
+                text = fh.read()
+        except OSError:
+            return False
+        changed = False
+        for name, value in (("balance_l", left_db), ("balance_r", right_db)):
+            pattern = re.compile(
+                r"(%s:\s*\n(?:[^\n]*\n)*?[^\n]*?gain:\s*)([-+]?[0-9]*\.?[0-9]+)"
+                % name)
+            text, n = pattern.subn(lambda m: m.group(1) + ("%.2f" % value), text)
+            changed = changed or n > 0
+        if not changed:
+            return False
+        return ToneControl._commit(path, text)
+
     def _reload_camilla(self) -> None:
         try:
             subprocess.run(["pkill", "-HUP", "-x", CAMILLA_PROC], timeout=5,
@@ -415,12 +500,21 @@ class ToneControl:
             pass
 
     def apply(self) -> None:
-        if not TONE_ENABLE or self.bass_db is None or self.treble_db is None:
+        if not TONE_ENABLE:
+            return
+        if self.bass_db is None or self.treble_db is None:
             return
         if self.last == (self.bass_db, self.treble_db):
             return
-        # Rewrite every variant template (so the gains persist whatever branch
-        # the chain runs) plus the active config CamillaDSP is reading now.
+        if BACKEND == "moode":
+            # moOde: one CamillaDSP config carries both tone and balance.
+            if self._rewrite_moode(self.bass_db, self.treble_db):
+                self._reload_camilla()
+            self.last = (self.bass_db, self.treble_db)
+            log("tone bass %+.1f dB / treble %+.1f dB" % (self.bass_db, self.treble_db))
+            return
+        # Volumio: rewrite every variant template (so the gains persist
+        # whatever branch the chain runs) plus the active config.
         paths = [TONE_TEMPLATE % v for v in TONE_VARIANTS]
         paths += [TONE_ACTIVE % v for v in TONE_VARIANTS if os.path.exists(TONE_ACTIVE % v)]
         wrote = False
@@ -438,6 +532,23 @@ class ToneControl:
         self.last = (self.bass_db, self.treble_db)
         log("tone bass %+.1f dB / treble %+.1f dB" % (self.bass_db, self.treble_db))
 
+    def _rewrite_moode(self, bass_db: float, treble_db: float,
+                       left_db: float | None = None, right_db: float | None = None) -> bool:
+        """Update tone (and optionally balance) in moOde's CamillaDSP config."""
+        path = MOODE_TONE_CONFIG
+        if not os.path.exists(path):
+            if not self._warned:
+                log("tone: moOde CamillaDSP config not found (%s)" % path)
+                self._warned = True
+            return False
+        self._warned = False
+        ok = self._rewrite(path, "bass", bass_db)
+        self._rewrite(path, "treble", treble_db)
+        if left_db is not None and right_db is not None:
+            if self._rewrite_balance(path, left_db, right_db):
+                ok = True
+        return ok
+
 
 # ----------------------------------------------------------------- controller
 
@@ -447,6 +558,7 @@ class Controller:
         self.pot_volume: int | None = None
         self.pot_balance: int | None = None
         self.last_api: int | None = None
+        self.last_balance: tuple[float, float] | None = None
         self.volume_dirty = False
         self.warned_missing = False
         self.next_ensure = 0.0
@@ -485,6 +597,16 @@ class Controller:
     def apply_balance(self) -> None:
         if self.pot_balance is None:
             return
+        pan = map_balance(self.pot_balance)
+        if BACKEND == "moode":
+            # Balance lives in the CamillaDSP tone config (per-channel gains).
+            want = balance_db_lr(pan)
+            if self.last_balance != want:
+                if self.tone._rewrite_balance(MOODE_TONE_CONFIG, *want):
+                    self.last_balance = want
+                    self.tone._reload_camilla()
+                    log("balance %+.2f/%+.2f dB (pot %s)" % (want[0], want[1], self.pot_balance))
+            return
         current = read_softmaster()
         if current is None:
             if not self.warned_missing:
@@ -499,7 +621,6 @@ class Controller:
         self.warned_missing = False
         left, right = current
         base = max(left, right)
-        pan = map_balance(self.pot_balance)
         want = balance_lr(base, pan)
         if (left, right) != want:
             write_softmaster(*want)
@@ -554,6 +675,10 @@ def selftest() -> int:
     assert balance_lr(99, 1.0) == (0, 99)
     assert balance_lr(99, -1.0) == (99, 0)
     assert balance_lr(50, 0.5) == (25, 50)
+    assert balance_db_lr(0.0) == (0.0, 0.0)
+    assert balance_db_lr(1.0, max_db=60) == (-60.0, 0.0)
+    assert balance_db_lr(-1.0, max_db=60) == (0.0, -60.0)
+    assert balance_db_lr(0.5, max_db=60) == (-30.0, 0.0)
     print("selftest ok")
     return 0
 
