@@ -1,12 +1,17 @@
 # moOde port plan — dual-output jukebox
 
-**Status:** planned, not started
+**Status:** implemented for the core audio stack (M0–M6, M8 partial); M7 touch UI pending go/no-go
 **Target:** moOde audio player 10.x (64-bit Raspberry Pi OS Trixie) on the same
 Raspberry Pi 4B hardware
 **Constraint:** the working Volumio SD stays untouched. Development happens on
 a separate, freshly flashed moOde SD (swap cards physically; label both).
 **Approach:** port the *concept*, reuse the existing Arduino firmware, and
 re-implement only the Pi-side glue against moOde's native mechanisms.
+
+> **Result (2026-10-02):** the moOde box now runs the full stack. See
+> `software/moode/dual-output/README.md` for what was verified live:
+> dual output (DAC + fixed-level USB analyser), live tone/balance via the
+> pots, CamillaDSP volume, guards, fail-safe and cold boot.
 
 ---
 
@@ -138,13 +143,13 @@ Each milestone ends with explicit checks; do not advance with a red check.
 
 ### M0 — Fresh moOde baseline (½ day)
 
-* [ ] Flash moOde 10.x 64-bit on a **new SD** (Pi Imager: user, password,
+* [x] Flash moOde 10.x 64-bit on a **new SD** (Pi Imager: user, password,
       SSH, Wi-Fi; hostname e.g. `moode`). Label the SD.
-* [ ] Boot, open `http://moode.local`, confirm stock playback works.
-* [ ] Inventory: `uname -a`, `aplay -l`, `cat /proc/asound/cards`,
+* [x] Boot, open `http://moode.local`, confirm stock playback works.
+* [x] Inventory: `uname -a`, `aplay -l`, `cat /proc/asound/cards`,
       `ls /dev/ttyACM0`, `camilladsp --version`, moOde release.
-* [ ] Verify large USB/ethernet stability is not needed for this work.
-* [ ] Save a baseline: copy `/etc/alsa/conf.d/`, `/etc/mpd.conf`,
+* [x] Verify large USB/ethernet stability is not needed for this work.
+* [x] Save a baseline: copy `/etc/alsa/conf.d/`, `/etc/mpd.conf`,
       `/boot/firmware/config.txt` to `/root/moode-baseline/`.
 
 **Exit:** inventory documented in this file; stock moOde plays music; baseline
@@ -152,11 +157,11 @@ saved.
 
 ### M1 — aarch64 binaries (½–1 day)
 
-* [ ] Check moOde's CamillaDSP version. If it is a stable v4 with the features
+* [x] Check moOde's CamillaDSP version. If it is a stable v4 with the features
       we need, **keep it** (policy: stable versions only, no dev builds).
-* [ ] If a newer stable is needed: download `camilladsp-linux-aarch64.tar.gz`
+* [x] If a newer stable is needed: download `camilladsp-linux-aarch64.tar.gz`
       (pin exact version + sha256), install to `/usr/local/bin/` with backup.
-* [ ] Cross-build our patched `cdsp` plugin for aarch64 (Docker recipe in
+* [x] Cross-build our patched `cdsp` plugin for aarch64 (Docker recipe in
       §7), md5 it, back up moOde's `.so`, deploy and confirm the plugin loads
       (`aplay -D camilladsp` smoke test with a minimal config to a `null`
       sink, then a real file to the DAC).
@@ -165,62 +170,62 @@ saved.
 
 ### M2 — ALSA split override (½ day)
 
-* [ ] Create our own `/etc/alsa/conf.d/90-jukebox.conf` overriding
+* [x] Create our own `/etc/alsa/conf.d/90-jukebox.conf` overriding
       `pcm.!_audioout` with the `multi` split (branch a: `camilladsp`;
       branch b: analyser chain → `plughw:CARD=Device`).
-* [ ] Leave moOde's own DSP options off (graphic/parametric EQ, its loopback,
+* [x] Leave moOde's own DSP options off (graphic/parametric EQ, its loopback,
       its CamillaDSP toggles) and document why.
-* [ ] Play a file: both cards `RUNNING` simultaneously.
-* [ ] Identify every moOde action that rewrites ALSA config and build the
+* [x] Play a file: both cards `RUNNING` simultaneously.
+* [x] Identify every moOde action that rewrites ALSA config and build the
       first guard (path unit) that restores `90-jukebox.conf`.
 
 **Exit:** dual playback works; a settings change no longer clobbers it.
 
 ### M3 — Tone control (½ day)
 
-* [ ] Ship a CamillaDSP config with the two shelves (120 Hz / 6 kHz, Q 0.7,
+* [x] Ship a CamillaDSP config with the two shelves (120 Hz / 6 kHz, Q 0.7,
       gain 0) into `/usr/share/camilladsp/configs/` and make it selectable
       with `set_cdsp_config`; keep a copy as the durable template.
-* [ ] Implement live gain rewrite on `working_config.yml` + `SIGHUP`
+* [x] Implement live gain rewrite on `working_config.yml` + `SIGHUP`
       (locate the process via `pgrep -f camilladsp`, as on Volumio).
-* [ ] Neutral position = flat (verify with a sweep or by ear + level check).
-* [ ] Test ±12 dB sweeps with music playing (no cut, no interruption).
+* [x] Neutral position = flat (verify with a sweep or by ear + level check).
+* [x] Test ±12 dB sweeps with music playing (no cut, no interruption).
 
 **Exit:** pots-independent manual sweeps work live.
 
 ### M4 — Volume and balance (½ day)
 
-* [ ] Set moOde `Volume type = CamillaDSP`; verify knob/REST volume changes
+* [x] Set moOde `Volume type = CamillaDSP`; verify knob/REST volume changes
       the DAC level only (analyser meter must not move).
-* [ ] Add balance as per-channel gains in the CamillaDSP pipeline; expose
+* [x] Add balance as per-channel gains in the CamillaDSP pipeline; expose
       them for scripted rewrite.
-* [ ] Confirm volume + balance + tone coexist without fighting (all in the
+* [x] Confirm volume + balance + tone coexist without fighting (all in the
       same config; rewrites preserve each other's values).
 
 **Exit:** DAC-only volume; balance L/R works; analyser constant.
 
 ### M5 — `jukebox-pots` port (1 day)
 
-* [ ] Add a backend switch (`JP_BACKEND=volumio|moode`): volume via moOde REST
+* [x] Add a backend switch (`JP_BACKEND=volumio|moode`): volume via moOde REST
       (`set_volume`, read `get_volume`) instead of Volumio's `:3000` API.
-* [ ] Replace the `SoftMaster` balance implementation with CamillaDSP
+* [x] Replace the `SoftMaster` balance implementation with CamillaDSP
       per-channel gain rewrites (same live mechanism as tone).
-* [ ] Keep: serial protocol, DTR-safe port opening (critical: a reset drops
+* [x] Keep: serial protocol, DTR-safe port opening (critical: a reset drops
       the relay state machine), tone rewrite, self-tests, `--probe`.
-* [ ] Installer adapted to moOde paths + systemd unit + udev rule; verify
+* [x] Installer adapted to moOde paths + systemd unit + udev rule; verify
       idempotency (install twice) and uninstall.
 
 **Exit:** all four pots behave exactly as on Volumio.
 
 ### M6 — Guards, fail-safe, MPD buffer (½ day)
 
-* [ ] Guard re-asserts: our ALSA override, CamillaDSP tone/balance gains,
+* [x] Guard re-asserts: our ALSA override, CamillaDSP tone/balance gains,
       MPD buffer settings.
-* [ ] udev rule on the USB card: unplug mid-playback → DAC keeps playing
+* [x] udev rule on the USB card: unplug mid-playback → DAC keeps playing
       (DAC-only variant); replug → analyser returns.
-* [ ] `buffer_time "3000000"`, `period_time "50000"` survive a moOde settings
+* [x] `buffer_time "3000000"`, `period_time "50000"` survive a moOde settings
       change and a reboot.
-* [ ] Reboot test: everything comes back by itself.
+* [x] Reboot test: everything comes back by itself.
 
 **Exit:** power-cycle and hotplug tests pass unattended.
 
@@ -238,7 +243,7 @@ saved.
 **Exit:** panel + touch usable and UI acceptable, or explicit decision to keep
 Volumio for UI reasons.
 
-### M8 — Clean-room validation (½ day)
+### M8 — Clean-room validation (½ day) — *uninstall→install cycle done; fresh SD pass pending*
 
 From a second freshly flashed moOde SD, run the whole install from this repo
 and execute the acceptance checklist (§8) without touching anything by heart.
