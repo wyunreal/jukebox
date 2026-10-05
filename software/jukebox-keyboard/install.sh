@@ -2,12 +2,12 @@
 #
 # install.sh - wire the KeyboardArduino to the jukebox playback transport.
 #
-# Installs a small always-on daemon that reads key events from the keyboard
+# Install a small always-on daemon that reads key events from the keyboard
 # board's USB serial port and runs the matching Volumio command on key press
 # (play, pause, stop, previous track, next track).
 #
-# The install is idempotent: running it again just re-asserts the same files,
-# keeps the existing key map and restarts the service.
+# The map is versioned in files/keymap.conf and installed as-is, so a fresh box
+# (or a re-install) gets exactly the same keys. The install is idempotent.
 #
 # Usage (on the Volumio host, as root):
 #   sudo ./install.sh                 # install / re-assert
@@ -17,14 +17,15 @@
 # Undo with ./uninstall.sh (or deploy.sh uninstall).
 #
 # Options:
-#   --key-action ROW,COL    assign a key to an action; repeatable. Actions:
+#   --key-action ROW,COL    override one action for this run; repeatable. Actions:
 #                           play|pause|stop|prev|next|mute|openclose|favourite|clear|savequeue
 #   --port DEV              serial device (default: auto-detect by product)
 #   --product STR           USB product string of the keyboard board
 #                           (default: "Jukebox Keyboard")
 #
 # Everything that lands on the host lives in files/ (readable, human) and is
-# copied or rendered from there; this script only orchestrates.
+# copied or rendered from there; the key map lives in files/keymap.conf and this
+# script only orchestrates.
 #
 # From a development machine use deploy.sh, which copies this directory over
 # SSH and runs this script remotely.
@@ -42,8 +43,8 @@ PORT=""
 PRODUCT="Jukebox Keyboard"
 BAUD="9600"
 
-# Key assignments, as "row,col"; kept in config.env so a re-run does not lose
-# the identified keys.
+# Key assignments, as "row,col". Defaults come from files/keymap.conf (the repo
+# is the source of truth); --key-action overrides individual entries.
 KEY_PLAY=""
 KEY_PAUSE=""
 KEY_STOP=""
@@ -63,7 +64,7 @@ die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 require_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 $*"; }
 
-usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
@@ -81,24 +82,31 @@ render_template() {
   sed "${sedargs[@]}" "$tmpl" >"$out"
 }
 
-# Load a previous key map so re-running install keeps it unless overridden.
-load_existing_config() {
-  [ -f "$CONFIG_ENV" ] || return 0
-  # shellcheck disable=SC1090
-  . "$CONFIG_ENV" 2>/dev/null || return 0
-  PORT="${JK_PORT:-$PORT}"
-  PRODUCT="${JK_PRODUCT:-$PRODUCT}"
-  BAUD="${JK_BAUD:-$BAUD}"
-  KEY_PLAY="${JK_KEY_PLAY:-$KEY_PLAY}"
-  KEY_PAUSE="${JK_KEY_PAUSE:-$KEY_PAUSE}"
-  KEY_STOP="${JK_KEY_STOP:-$KEY_STOP}"
-  KEY_PREV="${JK_KEY_PREV:-$KEY_PREV}"
-  KEY_NEXT="${JK_KEY_NEXT:-$KEY_NEXT}"
-  KEY_MUTE="${JK_KEY_MUTE:-$KEY_MUTE}"
-  KEY_OPENCLOSE="${JK_KEY_OPENCLOSE:-$KEY_OPENCLOSE}"
-  KEY_FAVOURITE="${JK_KEY_FAVOURITE:-$KEY_FAVOURITE}"
-  KEY_CLEAR="${JK_KEY_CLEAR:-$KEY_CLEAR}"
-  KEY_SAVEQUEUE="${JK_KEY_SAVEQUEUE:-$KEY_SAVEQUEUE}"
+# Read the versioned key map (files/keymap.conf: ACTION=ROW,COL per line). It is
+# the source of truth, so a fresh box gets exactly the map in the repo. Any
+# --key-action given on the command line is applied afterwards and wins.
+load_keymap() {
+  local f="$FILES_DIR/keymap.conf" line action value
+  [ -f "$f" ] || return 0
+  while IFS= read -r line; do
+    line="${line%%#*}"
+    line="$(printf '%s' "$line" | tr -d '[:space:]')"
+    [ -n "$line" ] || continue
+    action="${line%%=*}"
+    value="${line#*=}"
+    case "$action" in
+      play)      KEY_PLAY="$value" ;;
+      pause)     KEY_PAUSE="$value" ;;
+      stop)      KEY_STOP="$value" ;;
+      prev)      KEY_PREV="$value" ;;
+      next)      KEY_NEXT="$value" ;;
+      mute)      KEY_MUTE="$value" ;;
+      openclose|open/close)  KEY_OPENCLOSE="$value" ;;
+      favourite|favorite)    KEY_FAVOURITE="$value" ;;
+      clear|clearqueue)      KEY_CLEAR="$value" ;;
+      savequeue|saveplaylist|save)  KEY_SAVEQUEUE="$value" ;;
+    esac
+  done <"$f"
 }
 
 write_config() {
@@ -147,7 +155,6 @@ keys_to_assign() {
 cmd_install() {
   require_root
   [ -f "$FILES_DIR/jukebox-keyboard.py" ] || die "files/ not found next to install.sh"
-  load_existing_config
 
   say "Installing jukebox-keyboard (v$VERSION)"
   echo "    keyboard     : ${PORT:-auto-detect by USB product}"
@@ -179,8 +186,9 @@ cmd_install() {
 
   say "Done"
   cat <<EOF
-    Press a key and the matching playback command runs immediately. Assign or
-    change keys with --key-action ROW,COL (or edit $CONFIG_ENV and re-run).
+    Press a key and the matching playback command runs immediately. The key map
+    is versioned in files/keymap.conf; edit it there and re-run the installer
+    (or use --key-action ROW,COL for a one-off override).
 
     * Identify keys : sudo $APPLY_DIR/jukebox-keyboard.py --watch
     * Logs          : journalctl -u jukebox-keyboard -f
@@ -242,6 +250,8 @@ set_key() {
 
 main() {
   local mode="install"
+  # Seed the key map from the repo; any --key-action then overrides it.
+  load_keymap
   while [ $# -gt 0 ]; do
     case "$1" in
       --key-action)  set_key "$2" "$3"; shift 3 ;;

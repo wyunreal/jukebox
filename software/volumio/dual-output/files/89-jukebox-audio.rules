@@ -1,0 +1,2 @@
+ACTION=="change", SUBSYSTEM=="drm", KERNEL=="card*-HDMI-A-*", RUN+="/usr/bin/systemctl --no-block restart jukebox-audio-guard.service"
+ACTION=="add|remove", SUBSYSTEM=="sound", KERNEL=="card*", RUN+="/usr/bin/systemctl --no-block restart jukebox-audio-guard.service"

@@ -21,7 +21,8 @@ files/                 # everything that lands on the host (readable, human)
 ├── jukebox-keyboard.py
 ├── jukebox-keyboard.service
 ├── 89-jukebox-keyboard.rules
-└── config.env.in      # settings + key map template (@PLACEHOLDER@)
+├── keymap.conf        # the key map (source of truth: ACTION=ROW,COL)
+└── config.env.in      # settings template; keymap.conf fills the key map (@PLACEHOLDER@)
 README.md
 ```
 
@@ -31,8 +32,14 @@ asks the UI to do them (via `software/volumio/ui-nav`), so the UI updates itself
 
 ## Configuration
 
-The key -> action map lives in `/usr/local/jukebox-keyboard/config.env`
-(`JK_KEY_<action>=row,col`, 1-based). Actions:
+The key -> action map is **versioned in the repo** at
+`software/jukebox-keyboard/files/keymap.conf` (`ACTION=ROW,COL`, 1-based, one per
+line). `install.sh` installs it as `/usr/local/jukebox-keyboard/config.env`, so a
+fresh box (or a re-install) gets exactly the map in the repo. Edit `keymap.conf`
+and re-run the installer to change it; a one-off `--key-action ACTION ROW,COL`
+on the command line overrides a single entry for that run.
+
+Actions:
 
 | Action | Volumio command |
 |---|---|
@@ -74,6 +81,9 @@ sudo /usr/local/jukebox-keyboard/jukebox-keyboard.py --watch
 ```sh
 ./deploy.sh --host volumio@<host> install
 ```
+
+The key map comes from `files/keymap.conf`; `--key-action ACTION ROW,COL`
+(repeatable) overrides single entries for a one-off run.
 
 The overlay/UI packages are independent; this one only needs the keyboard board
 flashed with its own USB product string.

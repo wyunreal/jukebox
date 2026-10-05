@@ -33,36 +33,45 @@ hardware/3d-models/             # FreeCAD models, grouped by part
 
 software/volumio/              # Volumio flavour (the live box)
 ├── dual-output/                # custom dual audio output for Volumio
-│   ├── jukebox-audio.sh        # installer / verify / status (runs on the Pi)
-│   ├── deploy.sh               # ship and run the installer over SSH
-│   ├── camilladsp              # CamillaDSP v4.1.3 (armv7), tone-control engine
-│   ├── libasound_module_pcm_cdsp.so  # cdsp ALSA plugin (armhf, patched)
-│   ├── cdsp/                   # plugin source (patched) + strrep.h
+│   ├── deploy.sh / uninstall.sh  # scripts: ship+run over SSH, thin uninstall
+│   ├── files/                  # everything that lands on the Pi
+│   │   ├── jukebox-audio.sh    # installer / verify / status (engine)
+│   │   ├── camilladsp          # CamillaDSP v4.1.3 (armv7), tone-control engine
+│   │   ├── libasound_module_pcm_cdsp.so  # cdsp ALSA plugin (armhf, patched)
+│   │   ├── cdsp/               # plugin source (patched) + strrep.h
+│   │   └── jukebox-audio-guard.* / 89-jukebox-audio.rules  # units + udev rule
 │   └── README.md               # design doc: ALSA split, tone, variants, fail-safe
 ├── pot-overlay/                # on-screen indicator for balance/bass/treble
-│   ├── jukebox-overlay.py      # dependency-free HTTP/SSE server (port 3210)
-│   ├── overlay.js / overlay.css  # UI overlay (reuses Volumio's knob)
-│   ├── apply.sh                # (re)inject the loader into the UI pages
-│   ├── install.sh / deploy.sh  # installer + SSH wrapper
-│   └── README.md               # design doc: how the overlay is wired
+│   ├── install.sh / uninstall.sh / deploy.sh  # scripts
+│   └── files/                  # everything that lands on the Pi
+│       ├── jukebox-overlay.py  # dependency-free HTTP/SSE server (port 3210)
+│       ├── overlay.js / overlay.css  # UI overlay (reuses Volumio's knob)
+│       ├── apply.sh            # (re)inject the loader into the UI pages
+│       └── uninject.py         # strip the loader on uninstall
 ├── ui-nav/                     # daemon -> UI screen navigation channel
-│   ├── ui-nav.py               # dependency-free HTTP/SSE server (port 3211)
-│   ├── ui-nav.js               # injected client; drives the UI's $state
-│   ├── apply.sh                # (re)inject the loader into the UI pages
-│   ├── install.sh / deploy.sh  # installer + SSH wrapper
-│   └── README.md               # design doc
+│   ├── install.sh / uninstall.sh / deploy.sh  # scripts
+│   └── files/                  # everything that lands on the Pi
+│       ├── ui-nav.py           # dependency-free HTTP/SSE server (port 3211)
+│       ├── ui-nav.js           # injected client; drives the UI's $state
+│       ├── apply.sh            # (re)inject the loader into the UI pages
+│       └── uninject.py         # strip the loader on uninstall
 └── ui-boost/                   # touch UI performance kit for Volumio
+    ├── install.sh / uninstall.sh / deploy.sh  # scripts
+    └── files/                  # everything that lands on the Pi
+        └── jukebox-ui.sh / jukebox-ui-guard.*  # helper + guard units
 
 software/jukebox-pots/          # pot volume/balance/tone from the Arduino
-├── jukebox-pots.py             # daemon: USB serial -> DAC volume/balance/tone
-├── install.sh                  # idempotent installer (Volumio)
-├── deploy.sh                   # ship and run the installer over SSH
+├── install.sh / uninstall.sh / deploy.sh  # scripts
+├── files/                      # everything that lands on the Pi
+│   ├── jukebox-pots.py         # daemon: USB serial -> DAC volume/balance/tone
+│   └── jukebox-pots.service / 89-jukebox-pots.rules / config.env.in
 └── README.md                   # design doc: mapping, detection, analyser safety
 
 software/jukebox-keyboard/      # playback keys from the KeyboardArduino
-├── jukebox-keyboard.py         # daemon: USB serial -> play/pause/stop/prev/next
-├── install.sh                  # idempotent installer (Volumio)
-├── deploy.sh                   # ship and run the installer over SSH
+├── install.sh / uninstall.sh / deploy.sh  # scripts
+├── files/                      # everything that lands on the Pi
+│   ├── jukebox-keyboard.py     # daemon: USB serial -> play/pause/stop/prev/next
+│   └── jukebox-keyboard.service / 89-jukebox-keyboard.rules / config.env.in
 └── README.md                   # design doc: key map, detection
 
 skills/jukebox/SKILL.md         # agent skill to operate and troubleshoot the box
@@ -168,6 +177,19 @@ Requirements:
 
 The order matters: **player first, then the audio chain, then the pots.**
 
+There is also a top-level wrapper that drives all six packages in that order:
+
+```sh
+./deploy-all.sh install     # every package, second output = usb
+./deploy-all.sh uninstall   # reverse order
+./deploy-all.sh verify
+./deploy-all.sh status
+```
+
+It just sequences each package's own `deploy.sh`, so the per-package steps below
+are the same thing done by hand (and are still the way to pass package-specific
+options such as `--key-action`).
+
 ### Volumio (the live box)
 
 1. Flash Volumio and finish its first-run wizard (network, audio output).
@@ -212,15 +234,17 @@ The order matters: **player first, then the audio chain, then the pots.**
 
    It takes full effect after a reboot (`ssh volumio@<host> 'sudo reboot'`).
 
-5. *(Optional)* Wire the keyboard's playback keys. Identify each key with
-   `--watch` (press it and note the `row,col`) and assign the actions:
+5. *(Optional)* Wire the keyboard's playback keys. The map is versioned in
+   `software/jukebox-keyboard/files/keymap.conf`; install it as-is (identify a
+   key with `--watch` and edit the file if needed):
 
    ```sh
    cd software/jukebox-keyboard
-   ./deploy.sh --host volumio@<host> install \
-       --key-action play 3,3 --key-action pause 4,2 --key-action stop 3,1 \
-       --key-action prev 2,3 --key-action next 1,4
+   ./deploy.sh --host volumio@<host> install
    ```
+
+   A one-off `--key-action ACTION ROW,COL` (repeatable) overrides single entries
+   without touching the repo.
 
 6. **Reboot** so `alsa-restore`, the guard units and the pot daemon come up
    together, then play something and move the four pots.

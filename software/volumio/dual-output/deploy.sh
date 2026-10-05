@@ -38,6 +38,8 @@ DRY_RUN=0
 SCRIPT_NAME="jukebox-audio.sh"
 REMOTE_DIR="/tmp/jukebox-audio-deploy"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
+FILES=(README.md)
+FILES_DIR="files"
 
 usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -114,7 +116,7 @@ main() {
     *) die "unknown command: $command (see --help)" ;;
   esac
 
-  [ -f "$LOCAL_DIR/$SCRIPT_NAME" ] || die "$SCRIPT_NAME not found next to deploy.sh"
+  [ -f "$LOCAL_DIR/$FILES_DIR/$SCRIPT_NAME" ] || die "$SCRIPT_NAME not found in $FILES_DIR/"
   command -v ssh >/dev/null 2>&1 || die "ssh is not installed on this machine"
   if [ "$have_sshpass" = 0 ] && [ -n "$SSH_PASS" ]; then
     echo "note: sshpass not found; will use SSH keys/agent for the connection" >&2
@@ -124,24 +126,25 @@ main() {
   run_ssh "echo connected as \$(whoami)@\$(hostname); uname -sr" || die "cannot reach $HOST over SSH"
   ok "connected"
 
-  say "Copying $SCRIPT_NAME to $HOST:$REMOTE_DIR"
+  say "Copying the jukebox-audio package to $HOST:$REMOTE_DIR"
   if [ "$DRY_RUN" = 1 ]; then
     ok "dry-run: skipping copy"
   else
-    run_ssh "mkdir -p $REMOTE_DIR"
-    run_scp "$LOCAL_DIR/$SCRIPT_NAME" "$HOST:$REMOTE_DIR/$SCRIPT_NAME"
-    run_scp "$LOCAL_DIR/README.md" "$HOST:$REMOTE_DIR/README.md" 2>/dev/null || true
-    # Tone-control engine: CamillaDSP + the precompiled cdsp ALSA plugin.
-    [ -f "$LOCAL_DIR/camilladsp" ] && run_scp "$LOCAL_DIR/camilladsp" "$HOST:$REMOTE_DIR/camilladsp"
-    [ -f "$LOCAL_DIR/libasound_module_pcm_cdsp.so" ] && run_scp "$LOCAL_DIR/libasound_module_pcm_cdsp.so" "$HOST:$REMOTE_DIR/libasound_module_pcm_cdsp.so"
-    if [ -d "$LOCAL_DIR/cdsp" ]; then
-      run_ssh "mkdir -p $REMOTE_DIR/cdsp"
-      run_scp "$LOCAL_DIR/cdsp/"* "$HOST:$REMOTE_DIR/cdsp/" 2>/dev/null || true
+    run_ssh "rm -rf $REMOTE_DIR && mkdir -p $REMOTE_DIR/$FILES_DIR"
+    local f
+    for f in "${FILES[@]}"; do
+      [ -f "$LOCAL_DIR/$f" ] && run_scp "$LOCAL_DIR/$f" "$HOST:$REMOTE_DIR/$f"
+    done
+    # The installer plus every file that lands on the host (units, udev rule,
+    # CamillaDSP, the cdsp plugin and its source) is under files/. -r so the
+    # cdsp/ source subdirectory is copied too.
+    if [ -d "$LOCAL_DIR/$FILES_DIR" ]; then
+      run_scp -r "$LOCAL_DIR/$FILES_DIR/"* "$HOST:$REMOTE_DIR/$FILES_DIR/"
     fi
     ok "copied"
   fi
 
-  remote_cmd="$REMOTE_DIR/$SCRIPT_NAME $command"
+  remote_cmd="$REMOTE_DIR/$FILES_DIR/$SCRIPT_NAME $command"
   [ -n "$second_output" ] && remote_cmd="$remote_cmd $second_output"
   [ -n "$with_playback" ] && remote_cmd="$remote_cmd $with_playback"
 

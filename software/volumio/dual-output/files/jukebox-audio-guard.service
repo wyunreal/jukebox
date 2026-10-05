@@ -1,0 +1,12 @@
+[Unit]
+Description=Jukebox dual-output audio guard (re-assert configuration)
+Wants=alsa-restore.service
+After=alsa-restore.service local-fs.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=180
+ExecStart=/usr/local/jukebox-audio/jukebox-audio.sh apply --boot
+
+[Install]
+WantedBy=multi-user.target

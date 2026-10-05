@@ -57,16 +57,17 @@ appears (udev handles hotplug).
 
 ## Install
 
-From this directory (the script copies itself to the Pi and runs it there):
+From this directory (the deploy wrapper copies the package — scripts, the
+engine and its binaries under `files/` — to the Pi and runs it there):
 
 ```sh
 ./deploy.sh install --second-output usb     # or: hdmi / jack / none
 ```
 
-Or directly on the Volumio host:
+Or directly on the Volumio host (run the engine inside `files/`):
 
 ```sh
-sudo ./jukebox-audio.sh install --second-output usb
+sudo ./files/jukebox-audio.sh install --second-output usb
 ```
 
 The installer:
@@ -248,12 +249,16 @@ live one is selected automatically. `JB_USB_OVERRIDE=on|off` (or
 ## Layout
 
 ```
-jukebox-audio.sh                # installer / verify / status / apply (runs on the Pi)
-deploy.sh                       # ship and run it over SSH (with the binaries)
-camilladsp                      # CamillaDSP v4.1.3, armv7 build (precompiled)
-libasound_module_pcm_cdsp.so    # cdsp ALSA plugin, armhf (precompiled)
-cdsp/
-  libasound_module_pcm_cdsp.c   # plugin source (patched: see "Tone control")
-  strrep.h                      # substring-replace helper used by the plugin
-README.md                       # this file
+deploy.sh                   # scripts (repo root): ship the package + run it over SSH
+uninstall.sh                # thin wrapper around the engine's uninstall mode
+README.md                   # this file
+files/                      # everything that lands on the host
+  jukebox-audio.sh          # installer / verify / status / apply / uninstall (engine)
+  jukebox-audio-guard.service / .path  # systemd guard units
+  89-jukebox-audio.rules    # udev rule (HDMI/USB hotplug)
+  camilladsp                # CamillaDSP v4.1.3, armv7 build (precompiled)
+  libasound_module_pcm_cdsp.so  # cdsp ALSA plugin, armhf (precompiled)
+  cdsp/
+    libasound_module_pcm_cdsp.c  # plugin source (patched: see "Tone control")
+    strrep.h                # substring-replace helper used by the plugin
 ```

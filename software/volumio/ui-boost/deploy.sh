@@ -17,6 +17,7 @@
 #   install    install / re-assert the touch UI boost + guard
 #   verify     run the helper's verify
 #   status     show the helper's status
+#   uninstall  remove the guard and helper
 #
 # Examples:
 #   ./deploy.sh --host volumio@<host> install
@@ -31,9 +32,11 @@ HOST="volumio@<host>"
 SSH_PASS="${JUKEBOX_PASSWORD:-}"
 IDENTITY=""
 DRY_RUN=0
+SCRIPT_NAME="install.sh"
 REMOTE_DIR="/tmp/jukebox-ui-deploy"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
-FILES=(install.sh jukebox-ui.sh jukebox-ui-guard.service jukebox-ui-guard.path)
+FILES=(install.sh uninstall.sh README.md)
+FILES_DIR="files"
 
 usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -75,7 +78,7 @@ run_ssh_root() {
 
 main() {
   local command="install"
-  local positional=()
+  local remote_args=()
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -84,49 +87,70 @@ main() {
       -i|--identity) IDENTITY="$2"; shift 2 ;;
       -n|--dry-run) DRY_RUN=1; shift ;;
       -h|--help) usage; exit 0 ;;
-      -*) die "unknown option: $1 (see --help)" ;;
-      *) positional+=("$1"); shift ;;
+      *) remote_args+=("$1"); shift ;;
     esac
   done
-  [ "${#positional[@]}" -gt 0 ] && command="${positional[0]}"
+  if [ "${#remote_args[@]}" -gt 0 ]; then
+    case "${remote_args[0]}" in
+      install|verify|status|uninstall)
+        command="${remote_args[0]}"; remote_args=("${remote_args[@]:1}") ;;
+      -*) ;;
+      *) die "unknown command: ${remote_args[0]} (see --help)" ;;
+    esac
+  fi
 
-  case "$command" in
-    install|verify|status) ;;
-    *) die "unknown command: $command (see --help)" ;;
-  esac
-
+  [ -f "$LOCAL_DIR/$SCRIPT_NAME" ] || die "$SCRIPT_NAME not found next to deploy.sh"
   command -v ssh >/dev/null 2>&1 || die "ssh is not installed on this machine"
+  if [ "$have_sshpass" = 0 ] && [ -n "$SSH_PASS" ]; then
+    echo "note: sshpass not found; will use SSH keys/agent for the connection" >&2
+  fi
 
-  say "Target: $HOST"
-  say "Checking SSH connectivity"
-  run_ssh "echo connected as \$(whoami)@\$(hostname); uname -sr" || die "cannot reach $HOST over SSH"
-  ok "connected"
-
+  # status/verify act on an already-installed helper (no copy needed).
   if [ "$command" = "status" ] || [ "$command" = "verify" ]; then
+    say "Target: $HOST"
+    say "Checking SSH connectivity"
+    run_ssh "echo connected as \$(whoami)@\$(hostname); uname -sr" || die "cannot reach $HOST over SSH"
     say "Running: $command"
     run_ssh_root "/usr/local/jukebox-ui/jukebox-ui.sh $command" \
       || die "jukebox-ui is not installed on the host (run: ./deploy.sh install)"
     return
   fi
 
+  say "Target: $HOST"
+  say "Checking SSH connectivity"
+  run_ssh "echo connected as \$(whoami)@\$(hostname); uname -sr" || die "cannot reach $HOST over SSH"
+  ok "connected"
+
   say "Copying the jukebox-ui package to $HOST:$REMOTE_DIR"
   if [ "$DRY_RUN" = 1 ]; then
     ok "dry-run: skipping copy"
   else
-    run_ssh "mkdir -p $REMOTE_DIR"
+    run_ssh "mkdir -p $REMOTE_DIR/$FILES_DIR"
     local f
     for f in "${FILES[@]}"; do
       [ -f "$LOCAL_DIR/$f" ] && run_scp "$LOCAL_DIR/$f" "$HOST:$REMOTE_DIR/$f"
     done
+    if [ -d "$LOCAL_DIR/$FILES_DIR" ]; then
+      run_scp "$LOCAL_DIR/$FILES_DIR/"* "$HOST:$REMOTE_DIR/$FILES_DIR/"
+    fi
     ok "copied"
   fi
 
-  say "Running: sudo bash install.sh $command"
+  local runner="$SCRIPT_NAME"
+  [ "$command" = "uninstall" ] && runner="uninstall.sh"
+  local remote_cmd="bash $REMOTE_DIR/$runner $command"
+  [ "$command" = "uninstall" ] && remote_cmd="bash $REMOTE_DIR/$runner"
+  if [ "${#remote_args[@]}" -gt 0 ]; then
+    local a
+    for a in "${remote_args[@]}"; do remote_cmd="$remote_cmd $(printf '%q' "$a")"; done
+  fi
+
+  say "Running: sudo $remote_cmd"
   if [ "$DRY_RUN" = 1 ]; then
     ok "dry-run: not executing"
     return
   fi
-  run_ssh_root "bash $REMOTE_DIR/install.sh"
+  run_ssh_root "$remote_cmd"
   ok "done"
 }
 

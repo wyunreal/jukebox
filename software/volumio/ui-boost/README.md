@@ -40,14 +40,19 @@ the kiosk script).
 
 ## Install
 
-```sh
-# from the host, as root:
-sudo bash install.sh
+From this directory (the deploy wrapper copies the package to the Pi and runs
+`install.sh` there):
 
-# or from a dev machine (adjust the host/user to your setup):
-scp install.sh jukebox-ui.sh jukebox-ui-guard.service jukebox-ui-guard.path \
-    volumio@<host>:/tmp/
-ssh volumio@<host> 'cd /tmp && sudo bash install.sh'
+```sh
+./deploy.sh install        # or: ./deploy.sh --host <user>@<host> install
+./deploy.sh status
+./deploy.sh uninstall
+```
+
+Or directly on the Volumio host, as root:
+
+```sh
+sudo bash install.sh
 ```
 
 `<host>` is whatever mDNS name or IP your Volumio box has. `sudo` needs the
@@ -58,6 +63,10 @@ Then reboot once so the kiosk starts from a clean state:
 ```sh
 ssh volumio@<host> 'sudo reboot'
 ```
+
+Everything that lands on the host lives in `files/` (`jukebox-ui.sh`,
+`jukebox-ui-guard.service`, `jukebox-ui-guard.path`); the scripts in the
+package root only orchestrate.
 
 ## Status / verify
 

@@ -170,11 +170,14 @@ ensure_dsp_deps() {
 usage() { sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# The engine lives in files/ together with the binaries and the systemd units /
+# udev rule it installs. When run from a copy that lacks them, install_units
+# falls back to generating the units inline (see below).
 
 # Install CamillaDSP (the tone-control engine) and the ALSA "cdsp" plugin it
-# needs. Both binaries are shipped precompiled in this directory (armhf); the
-# plugin can also be rebuilt from source when a compiler and the ALSA dev
-# headers are present. Idempotent: re-running just re-installs the same files.
+# needs. Both binaries are shipped precompiled (armhf, in files/); deploy.sh
+# copies them next to this script. The plugin can also be rebuilt from source
+# when a compiler and the ALSA dev headers are present. Idempotent.
 install_tone_deps() {
   [ "$TONE_ENABLE" = "on" ] || return 0
   say "Installing tone-control engine (CamillaDSP + cdsp plugin)"
@@ -1280,6 +1283,13 @@ backup_config() {
 }
 
 install_units() {
+  # Prefer the shipped unit files (next to this script); fall back to the inline
+  # copies below when running from a copy that lacks them.
+  if [ -f "$SCRIPT_DIR/jukebox-audio-guard.service" ]; then
+    install -m 0644 "$SCRIPT_DIR/jukebox-audio-guard.service" /etc/systemd/system/jukebox-audio-guard.service
+    install -m 0644 "$SCRIPT_DIR/jukebox-audio-guard.path" /etc/systemd/system/jukebox-audio-guard.path
+    install -m 0644 "$SCRIPT_DIR/89-jukebox-audio.rules" "$UDEV_RULE"
+  else
   cat >/etc/systemd/system/jukebox-audio-guard.service <<EOF
 [Unit]
 Description=Jukebox dual-output audio guard (re-assert configuration)
@@ -1311,6 +1321,7 @@ EOF
 ACTION=="change", SUBSYSTEM=="drm", KERNEL=="card*-HDMI-A-*", RUN+="/usr/bin/systemctl --no-block restart jukebox-audio-guard.service"
 ACTION=="add|remove", SUBSYSTEM=="sound", KERNEL=="card*", RUN+="/usr/bin/systemctl --no-block restart jukebox-audio-guard.service"
 EOF
+  fi
   systemctl daemon-reload
   systemctl enable jukebox-audio-guard.service >/dev/null 2>&1 || true
   systemctl enable jukebox-audio-guard.path >/dev/null 2>&1 || true
@@ -1635,6 +1646,16 @@ cmd_verify() {
   else
     fail "volume control is not bound to the DAC card"; rc=$((rc + 1))
   fi
+
+  # Volumio regenerates /etc/mpd.conf asynchronously after its restart, so right
+  # after an install the mixer line can still be missing for a moment. Wait a
+  # little before failing, so install/apply do not report a transient failure.
+  local mpd_wait=0
+  while [ "$mpd_wait" -lt 15 ] \
+        && ! grep -q 'mixer_type[[:space:]]*"none"' /etc/mpd.conf 2>/dev/null; do
+    sleep 1
+    mpd_wait=$((mpd_wait + 1))
+  done
 
   if grep -q 'mixer_type[[:space:]]*"none"' /etc/mpd.conf 2>/dev/null; then
     ok "MPD mixer disabled (MPD volume cannot touch the second output)"

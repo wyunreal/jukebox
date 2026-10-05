@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch jukebox audio configuration files
+
+[Path]
+PathChanged=/etc/asound.conf
+PathChanged=/data/configuration/audio_interface/alsa_controller/asound/softvolume.postVolume.conf
+PathChanged=/volumio/app/plugins/music_service/mpd/special_cards_config.json
+
+[Install]
+WantedBy=multi-user.target

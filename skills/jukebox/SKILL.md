@@ -69,9 +69,9 @@ within seconds. That is by design.
 
 ## The jukebox-audio tool
 
-Canonical files + helper live in `/usr/local/jukebox-audio/`; the same script
-is in this repo at `software/volumio/dual-output/` (full design docs in its
-README).
+Canonical files + helper live in `/usr/local/jukebox-audio/`; the engine is in
+this repo at `software/volumio/dual-output/files/jukebox-audio.sh` (full design
+docs in its README).
 
 ```sh
 sudo /usr/local/jukebox-audio/jukebox-audio.sh status     # quick overview
@@ -216,9 +216,11 @@ states above.
 
 ## Repo map (for reference)
 
-- `software/volumio/dual-output/` — installer, deploy helper, README (the full
-  design doc: the ALSA split, the CamillaDSP tone step, variants, the `multi`
-  fail-safe). Ships the armv7 `camilladsp` binary and the armhf `cdsp` plugin.
+- `software/volumio/dual-output/` — scripts (`deploy.sh`, `uninstall.sh`) plus
+  `files/` with the engine (`jukebox-audio.sh`), the guard units/udev rule, the
+  armv7 `camilladsp` binary and the armhf `cdsp` plugin + source. Full design doc
+  in its README (the ALSA split, the CamillaDSP tone step, variants, the `multi`
+  fail-safe).
 - `software/jukebox-pots/` — `jukebox-pots.service`: reads `POT volume` /
   `POT balance` / `POT single` / `POT multi second` from the PowerAndPots
   Arduino over USB serial and drives the DAC volume (Volumio API), balance
