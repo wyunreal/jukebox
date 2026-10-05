@@ -42,6 +42,24 @@ user's password — ask for it, or have them run
 `JUKEBOX_PASSWORD=... ./deploy.sh ...` from their machine. Never hardcode
 credentials into files.
 
+## Install / operate everything
+
+From the repo (development machine) a single wrapper drives every package over
+SSH in dependency order — `dual-output` → `ui-boost` → `jukebox-pots` →
+`pot-overlay` → `ui-nav` → `jukebox-keyboard` (reversed for uninstall):
+
+```sh
+./deploy-all.sh install      # every package; second output fixed to usb
+./deploy-all.sh verify
+./deploy-all.sh status
+./deploy-all.sh uninstall
+```
+
+Defaults to `volumio@<host>`; use `-H volumio@<host>` and `-p <password>`
+(or `JUKEBOX_PASSWORD`). It just sequences each package's own `deploy.sh`, so
+package-specific one-off options (`--second-output`, `--key-action`, …) still
+go through the per-package `deploy.sh`.
+
 ## Expected state after login (checklist)
 
 | Check | Command | Expected |
@@ -212,7 +230,7 @@ states above.
 | Chain refuses to open | files hand-edited and guard reverted mid-play, or device busy | `mpc stop`; `apply`; `verify --with-playback` |
 | Overlay never shows | server down, nothing connected, or UI loader gone | `systemctl status jukebox-overlay`; `curl localhost:3210/state`; `sudo /usr/local/jukebox-overlay/apply.sh`; restart `volumio-kiosk` |
 | Overlay gone after a Volumio update | `index.html` rewritten | `systemctl start jukebox-overlay-guard.service` (re-injects), or re-run `apply.sh` |
-| A keyboard key does nothing | key not mapped, or wrong board | `journalctl -u jukebox-keyboard` (shows `unmapped key r,c`); identify with `jukebox-keyboard.py --watch`, then re-run install with `--key-action <action> r,c` |
+| A keyboard key does nothing | key not mapped, or wrong board | `journalctl -u jukebox-keyboard` (shows `unmapped key r,c`); identify with `jukebox-keyboard.py --watch`, edit `software/jukebox-keyboard/files/keymap.conf` and re-install (or a one-off `--key-action <action> r,c`) |
 
 ## Repo map (for reference)
 
@@ -243,11 +261,17 @@ states above.
 - `software/jukebox-keyboard/` — `jukebox-keyboard.service`: reads the
   KeyboardArduino's key events (`DOWN`/`UP`/`PRESS`/`LONG_PRESS`/`PRESSED`) and on
   key **press** runs the mapped Volumio command (play/pause/stop/prev/next/mute/
-  clear, favourite toggle, save queue as playlist, or open/close the queue view). Key
-  map in `/usr/local/jukebox-keyboard/config.env` (`JK_KEY_<action>=row,col`);
+  clear, favourite toggle, save queue as playlist, or open/close the queue view).
+  The key map is **versioned in the repo** at
+  `software/jukebox-keyboard/files/keymap.conf` (`ACTION=ROW,COL`) and installed
+  as-is, so a fresh/re-installed box gets the same keys; a one-off
+  `--key-action ACTION ROW,COL` overrides single entries. The installed copy is
+  `/usr/local/jukebox-keyboard/config.env` (`JK_KEY_<action>=row,col`);
   identify a key with `.../jukebox-keyboard.py --watch`. Selects the board by the
   `Jukebox Keyboard` USB product string. Install with
   `software/jukebox-keyboard/deploy.sh install`.
+- `deploy-all.sh` (repo root) — install/uninstall/verify/status for all packages
+  in dependency order.
 - This skill lives in `skills/jukebox/`.
 
 When the user asks for jukebox work and anything looks different from this

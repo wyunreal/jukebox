@@ -130,7 +130,7 @@ Step-by-step, from scratch: see
 
 See the full design doc:
 [software/volumio/dual-output/README.md](software/volumio/dual-output/README.md)
-(installer `jukebox-audio.sh`, shipped over SSH by `deploy.sh`).
+(engine `files/jukebox-audio.sh`, shipped over SSH by `deploy.sh`).
 
 Physical volume and balance from the PowerAndPots Arduino's potentiometers are
 handled by `software/jukebox-pots/` (`jukebox-pots.service`): it reads `POT
@@ -153,11 +153,12 @@ matching Volumio command on key **press**: play, pause, stop, previous track,
 next track, mute, clear the queue and save the queue as a playlist. One key
 toggles the current track/station in **favourites**, and one can **toggle the
 screen** between the now-playing home and the play queue (those two ask the UI,
-so they need `software/volumio/ui-nav`). The key → action map lives in its
-`config.env` (`JK_KEY_<action>=row,col`); identify a key with
-`--watch`. Install with
-`software/jukebox-keyboard/deploy.sh install --key-action play ROW,COL ...`; see
-its [README](software/jukebox-keyboard/README.md).
+so they need `software/volumio/ui-nav`). The key → action map is **versioned in
+the repo** at `software/jukebox-keyboard/files/keymap.conf` (`ACTION=row,col`) and
+installed as-is, so a fresh or re-installed box gets the same keys (a one-off
+`--key-action ACTION ROW,COL` overrides single entries). Identify a key with
+`--watch`. Install with `software/jukebox-keyboard/deploy.sh install`; see its
+[README](software/jukebox-keyboard/README.md).
 
 ## Installing from scratch
 
@@ -249,13 +250,11 @@ options such as `--key-action`).
 6. **Reboot** so `alsa-restore`, the guard units and the pot daemon come up
    together, then play something and move the four pots.
 
-Verification any time:
+Verification any time (all packages at once, or a single one):
 
 ```sh
+./deploy-all.sh verify                                  # every package
 ./software/volumio/dual-output/deploy.sh --host volumio@<host> verify --with-playback
-./software/jukebox-pots/deploy.sh --host volumio@<host> verify
-./software/jukebox-keyboard/deploy.sh --host volumio@<host> verify
-./software/volumio/ui-boost/deploy.sh --host volumio@<host> verify
 ```
 
 If `sudo` on the box needs a password, add `-p <password>` or export
