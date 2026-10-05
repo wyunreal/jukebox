@@ -32,7 +32,7 @@
 #   --balance-invert / --no-balance-invert
 #   --no-api               write the mixer directly instead of the player API
 #   --tone / --no-tone     enable/disable the bass+treble pots (default: on)
-#   --tone-max-db N        shelf range at the pot extremes (default: 12)
+#   --tone-max-db N        shelf range at the pot extremes (default: 8)
 #   --tone-center N        pot value that means flat (default: 10)
 #   --tone-span N          pot steps from center to full shelf (default: 10)
 #   --tone-bass-pot NAME   firmware line for bass: single|multisecond
@@ -64,7 +64,7 @@ VOLUME_INVERT="0"
 BALANCE_INVERT="0"
 USE_API="1"
 TONE_ENABLE="1"
-TONE_MAX_DB="12"
+TONE_MAX_DB="8"
 TONE_CENTER="10"
 TONE_SPAN="10"
 TONE_BASS_POT="single"

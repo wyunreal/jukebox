@@ -21,8 +21,8 @@ chain, on the **Volumio** box:
 | --- | --- | --- |
 | `POT volume` | 0–20 | Volumio volume, 0–100 % |
 | `POT balance` | 0–20, center 10 | pan of the DAC left/right (opposite channel attenuated) |
-| `POT single` | 0–20, center 10 | **bass** shelf, ±12 dB |
-| `POT multi second` | 0–20, center 10 | **treble** shelf, ±12 dB |
+| `POT single` | 0–20, center 10 | **bass** shelf, ±8 dB |
+| `POT multi second` | 0–20, center 10 | **treble** shelf, ±8 dB |
 
 Center (10) on either tone pot means **0 dB**, i.e. bit-for-bit transparent.
 The pots are not hard-wired to a function: `JP_TONE_BASS_POT` and
@@ -193,7 +193,7 @@ is running. The firmware streams regardless of DTR, so plain `termios` suffices.
 | `--balance-invert` | off | reverse left/right |
 | `--no-api` | off | write the mixer directly instead of the player volume path |
 | `--tone` / `--no-tone` | on | enable/disable the bass+treble pots |
-| `--tone-max-db N` | 12 | shelf range at the pot extremes |
+| `--tone-max-db N` | 8 | shelf range at the pot extremes |
 | `--tone-center N` | 10 | pot value meaning "flat" |
 | `--tone-span N` | 10 | pot steps from center to full shelf |
 | `--tone-bass-pot NAME` | single | firmware line driving bass (`single`/`multisecond`) |

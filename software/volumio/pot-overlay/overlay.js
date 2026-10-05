@@ -114,10 +114,11 @@
       var label = pan === 0 ? "C" : (pan < 0 ? "L " + mag : "R " + mag);
       show("Balance", label, "", Math.round(((pan + 1) / 2) * 100));
     } else if (m.type === "bass" || m.type === "treble") {
-      var db = round2(clamp(m.db, -12, 12));
+      var max = Math.abs(Number(m.max)) || 8;
+      var db = round2(clamp(m.db, -max, max));
       var name = m.type === "bass" ? "Bass" : "Treble";
       show(name, (db > 0 ? "+" : "") + db.toFixed(1), "dB",
-           Math.round(((db + 12) / 24) * 100));
+           Math.round(((db + max) / (2 * max)) * 100));
     }
   }
 

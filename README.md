@@ -71,8 +71,8 @@ Four potentiometers of the PowerAndPots Arduino drive the DAC (speakers) only:
 | --- | --- |
 | `POT volume` | Volumio volume (0–100 %) |
 | `POT balance` | left/right balance of the DAC |
-| `POT single` | bass shelf (±12 dB, center = flat) |
-| `POT multi second` | treble shelf (±12 dB, center = flat) |
+| `POT single` | bass shelf (±8 dB, center = flat) |
+| `POT multi second` | treble shelf (±8 dB, center = flat) |
 
 The spectrum analyser feed keeps its constant level and is not affected by any
 of them (including the tone). See

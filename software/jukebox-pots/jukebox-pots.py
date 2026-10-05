@@ -98,8 +98,9 @@ RESCAN_MS = _env_int("JP_RESCAN_MS", 3000)
 # The jukebox-audio chain runs audio through CamillaDSP (the ALSA cdsp plugin).
 # Its config carries two shelf gains marked JUKEBOX_TONE_BASS / JUKEBOX_TONE_TREBLE.
 # Both pots read 0..20 with 10 = flat (0 dB); they map to +/-TONE_MAX_DB.
+# Kept at +/-8 dB: the shelves distort above that on this hardware.
 TONE_ENABLE = _env_bool("JP_TONE", True)
-TONE_MAX_DB = _env_int("JP_TONE_MAX_DB", 12)
+TONE_MAX_DB = _env_int("JP_TONE_MAX_DB", 8)
 TONE_POT_CENTER = _env_int("JP_TONE_CENTER", 10)
 TONE_POT_SPAN = _env_int("JP_TONE_SPAN", 10) or 1
 TONE_BASS_INVERT = _env_bool("JP_TONE_BASS_INVERT", False)
@@ -390,12 +391,12 @@ class ToneControl:
             db = map_tone(value, invert=TONE_BASS_INVERT)
             if db != self.bass_db:
                 self.bass_db = db
-                notify_overlay("bass", db=round(db, 2))
+                notify_overlay("bass", db=round(db, 2), max=TONE_MAX_DB)
         elif name == TONE_TREBLE_POT:
             db = map_tone(value, invert=TONE_TREBLE_INVERT)
             if db != self.treble_db:
                 self.treble_db = db
-                notify_overlay("treble", db=round(db, 2))
+                notify_overlay("treble", db=round(db, 2), max=TONE_MAX_DB)
 
     def _active_variant(self) -> str | None:
         for v in TONE_VARIANTS:
