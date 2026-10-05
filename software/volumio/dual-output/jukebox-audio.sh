@@ -67,7 +67,7 @@
 #
 set -euo pipefail
 
-VERSION="1.2.0"
+VERSION="1.2.1"
 
 APPLY_DIR="/usr/local/jukebox-audio"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -1242,8 +1242,32 @@ restart_volumio() {
   fi
 }
 
+# True if the live ALSA config is already managed by this tool. Used to avoid
+# overwriting a clean pre-install backup with an already-managed state on
+# re-install.
+is_jukebox_active() {
+  local f
+  for f in /etc/asound.conf "$SNIPPET_PATH"; do
+    [ -f "$f" ] || continue
+    grep -q "jukebox-audio variant:" "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
 backup_config() {
   local ts dir
+  # Never overwrite a clean pre-install backup with a managed state: a re-run
+  # of install must not poison the restore point. If the current files already
+  # carry the jukebox markers, keep the existing backup (if any).
+  if is_jukebox_active; then
+    if [ -d "$BACKUP_ROOT/latest" ]; then
+      ok "already installed; keeping existing backup $(readlink -f "$BACKUP_ROOT/latest")"
+      return 0
+    fi
+    warn "current ALSA config already carries jukebox markers but no backup exists"
+    warn "a restore point can no longer be captured; uninstall will let Volumio regenerate"
+  fi
+
   ts="$(date +%Y%m%d-%H%M%S)"
   dir="$BACKUP_ROOT/$ts"
   mkdir -p "$dir"
@@ -1749,7 +1773,9 @@ cmd_uninstall() {
   remove_units
   ok "guard units and udev rule removed"
 
-  if [ -d "$BACKUP_ROOT/latest" ]; then
+  local backup_dir
+  backup_dir="$(readlink -f "$BACKUP_ROOT/latest" 2>/dev/null || true)"
+  if [ -n "$backup_dir" ] && [ -d "$backup_dir" ]; then
     local pair src b
     for pair in "/etc/asound.conf:asound.conf" \
                 "/etc/mpd.conf:mpd.conf" \
@@ -1759,9 +1785,16 @@ cmd_uninstall() {
                 "/var/lib/alsa/asound.state:asound.state"; do
       src="${pair%%:*}"
       b="${pair##*:}"
-      if [ -f "$BACKUP_ROOT/latest/$b" ]; then
-        cp -a "$BACKUP_ROOT/latest/$b" "$src" && ok "restored $src"
+      [ -f "$backup_dir/$b" ] || continue
+      # A restore point that already carries jukebox markers is not a clean
+      # pre-install state (older installer poisoned it). Drop the managed file
+      # instead and let Volumio regenerate its own configuration.
+      if grep -q "jukebox-audio variant:" "$backup_dir/$b" 2>/dev/null; then
+        warn "backup $b is a managed state, not a clean one; removing $src"
+        rm -f "$src"
+        continue
       fi
+      cp -a "$backup_dir/$b" "$src" && ok "restored $src"
     done
   else
     warn "no backup found; Volumio will regenerate its own configuration"

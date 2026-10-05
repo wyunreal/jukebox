@@ -234,6 +234,13 @@ live one is selected automatically. `JB_USB_OVERRIDE=on|off` (or
   screen.
 * Uninstall restores the most recent backup
   (`/var/backups/jukebox-audio/latest`).
+* **Re-running `install` does not poison the backup.** The restore point is
+  captured only from a *clean* (not yet jukebox-managed) configuration: once the
+  live ALSA files carry the jukebox markers, a re-install keeps the existing
+  backup instead of overwriting it with an already-managed state. If a backup
+  file is itself a managed state (from an old installer version) `uninstall`
+  does not restore it; it removes the managed file and lets Volumio regenerate
+  its own configuration.
 
 ## Layout
 
