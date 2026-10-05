@@ -60,6 +60,8 @@ credentials into files.
 | UI boost | `sudo /usr/local/jukebox-ui/jukebox-ui.sh verify` | all `ok`, X screen `800x480` |
 | UI guard | `systemctl is-active jukebox-ui-guard.path` | `active` |
 | Pot overlay | `systemctl is-active jukebox-overlay.service` | `active` (port 3210) |
+| UI nav | `systemctl is-active jukebox-ui-nav.service` | `active` (port 3211) |
+| Keyboard | `systemctl is-active jukebox-keyboard.service` | `active` (if installed) |
 
 If the USB card is unplugged, the chain automatically falls back to DAC-only
 (speakers keep playing); plug it back and the guard/udev re-activates the split
@@ -228,6 +230,12 @@ states above.
   by `apply.sh`, kept in place by `jukebox-overlay-guard.path`). The client reuses
   the UI's bundled jQuery-knob so it looks like the volume indicator. Install with
   `software/volumio/pot-overlay/deploy.sh install` (after jukebox-pots).
+- `software/volumio/ui-nav/` — daemon → UI navigation channel (port 3211): a small
+  stdlib HTTP/SSE server plus an injected `ui-nav.js` that drives the UI's
+  ui-router `$state`. A daemon POSTs `{"type":"nav","view":"toggle"|"home"|"queue"}`
+  to switch between the now-playing home and the play queue. Used by the
+  keyboard's open/close key; separate from `pot-overlay` on purpose.
+  Install with `software/volumio/ui-nav/deploy.sh install`.
 - `software/jukebox-keyboard/` — `jukebox-keyboard.service`: reads the
   KeyboardArduino's key events (`DOWN`/`UP`/`PRESS`/`LONG_PRESS`/`PRESSED`) and on
   key **press** runs the mapped Volumio command (play/pause/stop/prev/next/mute).

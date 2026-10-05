@@ -17,7 +17,7 @@
 #
 # Options:
 #   --key-action ROW,COL    assign a key to an action; repeatable. Actions:
-#                           play|pause|stop|prev|next|mute
+#                           play|pause|stop|prev|next|mute|openclose
 #   --port DEV              serial device (default: auto-detect by product)
 #   --product STR           USB product string of the keyboard board
 #                           (default: "Jukebox Keyboard")
@@ -27,7 +27,7 @@
 #
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 APPLY_DIR="/usr/local/jukebox-keyboard"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -46,6 +46,7 @@ KEY_STOP=""
 KEY_PREV=""
 KEY_NEXT=""
 KEY_MUTE=""
+KEY_OPENCLOSE=""
 
 say()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ok()   { printf '    \033[1;32mok\033[0m   %s\n' "$*"; }
@@ -73,6 +74,7 @@ load_existing_config() {
   KEY_PREV="${JK_KEY_PREV:-$KEY_PREV}"
   KEY_NEXT="${JK_KEY_NEXT:-$KEY_NEXT}"
   KEY_MUTE="${JK_KEY_MUTE:-$KEY_MUTE}"
+  KEY_OPENCLOSE="${JK_KEY_OPENCLOSE:-$KEY_OPENCLOSE}"
 }
 
 write_config() {
@@ -82,12 +84,14 @@ write_config() {
 JK_PORT=$PORT
 JK_PRODUCT=$PRODUCT
 JK_BAUD=$BAUD
+JK_NAV_URL=http://localhost:3211/update
 JK_KEY_PLAY=$KEY_PLAY
 JK_KEY_PAUSE=$KEY_PAUSE
 JK_KEY_STOP=$KEY_STOP
 JK_KEY_PREV=$KEY_PREV
 JK_KEY_NEXT=$KEY_NEXT
 JK_KEY_MUTE=$KEY_MUTE
+JK_KEY_OPENCLOSE=$KEY_OPENCLOSE
 EOF
 }
 
@@ -136,6 +140,7 @@ keys_to_assign() {
   [ -n "$KEY_PREV" ] && echo "prev=$KEY_PREV"
   [ -n "$KEY_NEXT" ] && echo "next=$KEY_NEXT"
   [ -n "$KEY_MUTE" ] && echo "mute=$KEY_MUTE"
+  [ -n "$KEY_OPENCLOSE" ] && echo "openclose=$KEY_OPENCLOSE"
   true
 }
 
@@ -237,7 +242,8 @@ set_key() {
     prev)  KEY_PREV="$2" ;;
     next)  KEY_NEXT="$2" ;;
     mute)  KEY_MUTE="$2" ;;
-    *) die "unknown action for --key-action: $1 (use play|pause|stop|prev|next|mute)" ;;
+    openclose|open/close)  KEY_OPENCLOSE="$2" ;;
+    *) die "unknown action for --key-action: $1 (use play|pause|stop|prev|next|mute|openclose)" ;;
   esac
 }
 

@@ -45,6 +45,12 @@ software/volumio/              # Volumio flavour (the live box)
 │   ├── apply.sh                # (re)inject the loader into the UI pages
 │   ├── install.sh / deploy.sh  # installer + SSH wrapper
 │   └── README.md               # design doc: how the overlay is wired
+├── ui-nav/                     # daemon -> UI screen navigation channel
+│   ├── ui-nav.py               # dependency-free HTTP/SSE server (port 3211)
+│   ├── ui-nav.js               # injected client; drives the UI's $state
+│   ├── apply.sh                # (re)inject the loader into the UI pages
+│   ├── install.sh / deploy.sh  # installer + SSH wrapper
+│   └── README.md               # design doc
 └── ui-boost/                   # touch UI performance kit for Volumio
 
 software/jukebox-pots/          # pot volume/balance/tone from the Arduino
@@ -135,7 +141,9 @@ adds a small local SSE server that the daemon feeds and the UI renders; see its
 The KeyboardArduino's 4x4 button matrix drives playback. `software/jukebox-keyboard/`
 (`jukebox-keyboard.service`) reads its key events over USB serial and runs the
 matching Volumio command on key **press**: play, pause, stop, previous track,
-next track and mute. The key → action map lives in its `config.env`
+next track and mute. One key can also **toggle the screen** between the
+now-playing home and the play queue (that one asks the UI, so it needs
+`software/volumio/pot-overlay`). The key → action map lives in its `config.env`
 (`JK_KEY_<action>=row,col`); identify a key with `--watch`. Install with
 `software/jukebox-keyboard/deploy.sh install --key-action play ROW,COL ...`; see
 its [README](software/jukebox-keyboard/README.md).
@@ -232,8 +240,9 @@ If `sudo` on the box needs a password, add `-p <password>` or export
 |---|---|
 | `software/volumio/dual-output` | ALSA split + CamillaDSP tone step + guards + MPD buffers for Volumio |
 | `software/volumio/pot-overlay` | On-screen balance/bass/treble indicator (overlay server + injected UI loader) |
+| `software/volumio/ui-nav` | UI navigation channel (a daemon can switch the screen; used by the open/close key) |
 | `software/jukebox-pots` | `jukebox-pots.service` (volume/balance/tone from the Arduino) |
-| `software/jukebox-keyboard` | `jukebox-keyboard.service` (play/pause/stop/prev/next from the key matrix) |
+| `software/jukebox-keyboard` | `jukebox-keyboard.service` (play/pause/stop/prev/next/mute, and open/close the queue view) |
 | `software/volumio/ui-boost` | Volumio-only touch UI performance fixes |
 
 ## Safety notice

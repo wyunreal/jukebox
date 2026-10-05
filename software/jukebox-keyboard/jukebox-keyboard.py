@@ -43,6 +43,9 @@ def _env(name: str, default: str) -> str:
 BAUD = int(_env("JK_BAUD", "9600"))
 PRODUCT_MATCH = _env("JK_PRODUCT", "Jukebox Keyboard")
 VOLUMIO = _env("JK_VOLUMIO", "localhost:3000")
+# Navigation channel (jukebox-ui-nav): the open/close key asks the UI to switch
+# screen. Separate from the pot overlay, which carries pot values.
+NAV_URL = _env("JK_NAV_URL", "http://localhost:3211/update")
 
 # Longest side of the matrix; keys outside 1..N are ignored as noise.
 MATRIX_N = int(_env("JK_MATRIX_N", "4"))
@@ -55,6 +58,7 @@ ACTIONS = {
     "PREV": _env("JK_KEY_PREV", ""),
     "NEXT": _env("JK_KEY_NEXT", ""),
     "MUTE": _env("JK_KEY_MUTE", ""),
+    "OPENCLOSE": _env("JK_KEY_OPENCLOSE", ""),
 }
 # Volumio command per action. MUTE is handled separately (it reads the current
 # state and toggles), so it is not listed here.
@@ -66,7 +70,7 @@ CMD = {
     "NEXT": "next",
 }
 # Order used for lookup and for the probe listing.
-ACTION_ORDER = ("PLAY", "PAUSE", "STOP", "PREV", "NEXT", "MUTE")
+ACTION_ORDER = ("PLAY", "PAUSE", "STOP", "PREV", "NEXT", "MUTE", "OPENCLOSE")
 
 # "DOWN r c" is the press event; we act on it so keys feel immediate.
 PRESS_RE = re.compile(r"^DOWN\s+(\d+)\s+(\d+)\s*$")
@@ -120,6 +124,18 @@ def is_muted() -> bool | None:
         return None
 
 
+def _post_nav(payload: dict) -> None:
+    """Best-effort POST to the ui-nav server (daemon -> UI navigation)."""
+    data = json.dumps(payload).encode()
+    try:
+        req = urllib.request.Request(NAV_URL, data=data,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            resp.read()
+    except Exception:
+        pass  # ui-nav not installed / not reachable
+
+
 def run_action(action: str) -> None:
     if action == "MUTE":
         muted = is_muted()
@@ -129,6 +145,10 @@ def run_action(action: str) -> None:
         cmd = "unmute" if muted else "mute"
         _volumio("/api/v1/commands/?cmd=volume&volume=%s" % cmd)
         log("MUTE -> %s" % cmd)
+        return
+    if action == "OPENCLOSE":
+        _post_nav({"type": "nav", "view": "toggle"})
+        log("OPENCLOSE -> toggle view")
         return
     cmd = CMD.get(action)
     if not cmd:

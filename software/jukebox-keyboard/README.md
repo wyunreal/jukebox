@@ -34,6 +34,11 @@ The key -> action map lives in `/usr/local/jukebox-keyboard/config.env`
 | `PREV` | `cmd=prev` |
 | `NEXT` | `cmd=next` |
 | `MUTE` | toggles mute (reads the current state, then mute/unmute) |
+| `OPENCLOSE` | toggles the UI between the now-playing home and the play queue |
+
+`OPENCLOSE` is not a Volumio command: it asks the UI to switch view, so it needs
+`software/volumio/ui-nav` installed (its server is the daemon → UI channel, and
+its injected client calls the UI's `$state`).
 
 ## Identify the keys
 

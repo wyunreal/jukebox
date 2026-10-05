@@ -1,0 +1,15 @@
+[Unit]
+Description=Jukebox UI navigation channel (daemon -> Volumio UI)
+After=volumio.service
+Wants=volumio.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/usr/local/jukebox-ui-nav/config.env
+ExecStart=/usr/local/jukebox-ui-nav/ui-nav.py
+Restart=always
+RestartSec=3
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
