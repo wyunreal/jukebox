@@ -230,7 +230,8 @@ states above.
   `software/volumio/pot-overlay/deploy.sh install` (after jukebox-pots).
 - `software/jukebox-keyboard/` — `jukebox-keyboard.service`: reads the
   KeyboardArduino's key events (`DOWN`/`UP`/`PRESS`/`LONG_PRESS`/`PRESSED`) and on
-  key **press** runs the mapped Volumio command (play/pause/stop/prev/next). Key
+  key **press** runs the mapped Volumio command (play/pause/stop/prev/next/mute).
+  Key
   map in `/usr/local/jukebox-keyboard/config.env` (`JK_KEY_<action>=row,col`);
   identify a key with `.../jukebox-keyboard.py --watch`. Selects the board by the
   `Jukebox Keyboard` USB product string. Install with

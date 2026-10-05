@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import re
 import select
@@ -53,8 +54,10 @@ ACTIONS = {
     "STOP": _env("JK_KEY_STOP", ""),
     "PREV": _env("JK_KEY_PREV", ""),
     "NEXT": _env("JK_KEY_NEXT", ""),
+    "MUTE": _env("JK_KEY_MUTE", ""),
 }
-# Volumio command per action.
+# Volumio command per action. MUTE is handled separately (it reads the current
+# state and toggles), so it is not listed here.
 CMD = {
     "PLAY": "play",
     "PAUSE": "pause",
@@ -62,6 +65,8 @@ CMD = {
     "PREV": "prev",
     "NEXT": "next",
 }
+# Order used for lookup and for the probe listing.
+ACTION_ORDER = ("PLAY", "PAUSE", "STOP", "PREV", "NEXT", "MUTE")
 
 # "DOWN r c" is the press event; we act on it so keys feel immediate.
 PRESS_RE = re.compile(r"^DOWN\s+(\d+)\s+(\d+)\s*$")
@@ -88,23 +93,48 @@ def key_of(action: str) -> tuple[int, int] | None:
 
 
 def action_for(row: int, col: int) -> str | None:
-    for action in ("PLAY", "PAUSE", "STOP", "PREV", "NEXT"):
+    for action in ACTION_ORDER:
         if key_of(action) == (row, col):
             return action
     return None
 
 
+def _volumio(path: str) -> str | None:
+    url = "http://%s%s" % (VOLUMIO, path)
+    try:
+        with urllib.request.urlopen(url, timeout=3) as resp:
+            return resp.read().decode("utf-8", "ignore")
+    except Exception as exc:  # noqa: BLE001
+        log("volumio request failed (%s)" % exc)
+        return None
+
+
+def is_muted() -> bool | None:
+    """Current mute state from Volumio, or None if it cannot be read."""
+    body = _volumio("/api/v1/getState")
+    if body is None:
+        return None
+    try:
+        return bool(json.loads(body).get("mute"))
+    except ValueError:
+        return None
+
+
 def run_action(action: str) -> None:
+    if action == "MUTE":
+        muted = is_muted()
+        if muted is None:
+            log("MUTE -> failed (cannot read state)")
+            return
+        cmd = "unmute" if muted else "mute"
+        _volumio("/api/v1/commands/?cmd=volume&volume=%s" % cmd)
+        log("MUTE -> %s" % cmd)
+        return
     cmd = CMD.get(action)
     if not cmd:
         return
-    url = "http://%s/api/v1/commands/?cmd=%s" % (VOLUMIO, cmd)
-    try:
-        with urllib.request.urlopen(url, timeout=3) as resp:
-            resp.read()
-        log("%s -> cmd=%s" % (action, cmd))
-    except Exception as exc:  # noqa: BLE001
-        log("%s -> failed (%s)" % (action, exc))
+    _volumio("/api/v1/commands/?cmd=%s" % cmd)
+    log("%s -> cmd=%s" % (action, cmd))
 
 
 # -------------------------------------------------------------------- serial
@@ -189,7 +219,7 @@ def _describe() -> None:
     port = find_port()
     print("board product : %s" % PRODUCT_MATCH)
     print("serial port   : %s" % (port or "<not found>"))
-    for action in ("PLAY", "PAUSE", "STOP", "PREV", "NEXT"):
+    for action in ACTION_ORDER:
         k = key_of(action)
         print("key %-5s     : %s" % (action, ("%d,%d" % k) if k else "<unassigned>"))
 

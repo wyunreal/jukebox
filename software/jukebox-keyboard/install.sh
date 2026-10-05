@@ -17,7 +17,7 @@
 #
 # Options:
 #   --key-action ROW,COL    assign a key to an action; repeatable. Actions:
-#                           play|pause|stop|prev|next
+#                           play|pause|stop|prev|next|mute
 #   --port DEV              serial device (default: auto-detect by product)
 #   --product STR           USB product string of the keyboard board
 #                           (default: "Jukebox Keyboard")
@@ -27,7 +27,7 @@
 #
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 APPLY_DIR="/usr/local/jukebox-keyboard"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -45,6 +45,7 @@ KEY_PAUSE=""
 KEY_STOP=""
 KEY_PREV=""
 KEY_NEXT=""
+KEY_MUTE=""
 
 say()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ok()   { printf '    \033[1;32mok\033[0m   %s\n' "$*"; }
@@ -71,6 +72,7 @@ load_existing_config() {
   KEY_STOP="${JK_KEY_STOP:-$KEY_STOP}"
   KEY_PREV="${JK_KEY_PREV:-$KEY_PREV}"
   KEY_NEXT="${JK_KEY_NEXT:-$KEY_NEXT}"
+  KEY_MUTE="${JK_KEY_MUTE:-$KEY_MUTE}"
 }
 
 write_config() {
@@ -85,6 +87,7 @@ JK_KEY_PAUSE=$KEY_PAUSE
 JK_KEY_STOP=$KEY_STOP
 JK_KEY_PREV=$KEY_PREV
 JK_KEY_NEXT=$KEY_NEXT
+JK_KEY_MUTE=$KEY_MUTE
 EOF
 }
 
@@ -132,6 +135,7 @@ keys_to_assign() {
   [ -n "$KEY_STOP" ] && echo "stop=$KEY_STOP"
   [ -n "$KEY_PREV" ] && echo "prev=$KEY_PREV"
   [ -n "$KEY_NEXT" ] && echo "next=$KEY_NEXT"
+  [ -n "$KEY_MUTE" ] && echo "mute=$KEY_MUTE"
   true
 }
 
@@ -232,7 +236,8 @@ set_key() {
     stop)  KEY_STOP="$2" ;;
     prev)  KEY_PREV="$2" ;;
     next)  KEY_NEXT="$2" ;;
-    *) die "unknown action for --key-action: $1 (use play|pause|stop|prev|next)" ;;
+    mute)  KEY_MUTE="$2" ;;
+    *) die "unknown action for --key-action: $1 (use play|pause|stop|prev|next|mute)" ;;
   esac
 }
 

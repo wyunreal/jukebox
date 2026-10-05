@@ -33,6 +33,7 @@ The key -> action map lives in `/usr/local/jukebox-keyboard/config.env`
 | `STOP` | `cmd=stop` |
 | `PREV` | `cmd=prev` |
 | `NEXT` | `cmd=next` |
+| `MUTE` | toggles mute (reads the current state, then mute/unmute) |
 
 ## Identify the keys
 
