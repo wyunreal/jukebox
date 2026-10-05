@@ -12,7 +12,12 @@ POT volume: 15 (raw 700)
 POT balance: 10 (raw 512)
 POT single: 12 (raw 640)
 POT multi second: 8 (raw 430)
+POWER switch: ON
 ```
+
+The Arduino also reports its power button (`POWER: soft off` on a short press,
+`POWER: hard off` on a long one); the daemon can turn that into a clean Pi
+shutdown — see [Power button](#power-button-soft-power-off).
 
 A small daemon reads those lines and applies them to the DAC branch of the
 chain, on the **Volumio** box:
@@ -73,6 +78,44 @@ The volume path, balance and tone are those of the **Volumio** chain:
 * The daemon never asserts DTR (see the clone notes above); the firmware reports
   regardless of it, and the status request is a plain byte.
 
+## Power button (soft power off)
+
+The PowerAndPots Arduino runs the board's power state machine, so its button is
+the jukebox's power button. A **short press** prints `POWER: soft off` and
+leaves the relay on; a **long press** (≥ 5 s) cuts the relay immediately.
+
+With the power button enabled (the default), the daemon turns that short press
+into a clean shutdown of the Pi:
+
+```
+button short press --> Arduino "POWER: soft off"
+                   --> daemon: send "POWER: off 30" to the Arduino
+                   --> daemon: systemctl poweroff
+                   --> Arduino waits 30 s, then cuts the power relay
+```
+
+The relay must stay on until the Pi has finished halting, and the Pi cannot
+send anything once it is down. The board, however, keeps running from 5VSB, so
+the **delay lives there**: the daemon arms it in the last message it sends
+(`POWER: off <delay>`), the firmware counts down and cuts the relay. The delay
+is `--power-off-delay` / `JP_POWER_OFF_DELAY_S` (**default 30 s**, choose your
+own margin for how long the Pi really takes to halt). The **long press** stays
+the immediate hard cut, and cancels any pending cut — the escape hatch if the
+Pi hangs.
+
+This is **on by default**; it is irreversible: once the Pi is down, software
+cannot bring it back. Disable it with `--no-power-button` (or
+`JP_POWER_BUTTON=0`). `--power-cmd "CMD"` overrides the halt command (default
+`systemctl poweroff`); the daemon runs as root. Inspect the sequence without
+touching anything with:
+
+```sh
+sudo /usr/local/jukebox-pots/jukebox-pots.py --poweroff-test
+```
+
+> The daemon must not assert DTR (see the DTR note above): it reboots the board,
+> which resets the relay and would drop power. Nothing here does.
+
 ## Install
 
 From this directory (the script copies itself to the Pi and runs it there):
@@ -85,6 +128,15 @@ Or directly on the host (Volumio):
 
 ```sh
 sudo ./install.sh install
+```
+
+Common option examples (all flags are also in the table below):
+
+```sh
+./deploy.sh install                              # power button ON, relay cut 30 s after
+./deploy.sh install --no-power-button            # short press does nothing
+./deploy.sh install --power-off-delay 45         # wait 45 s before cutting the relay
+./deploy.sh install --power-cmd 'shutdown -h now'
 ```
 
 The installer is **idempotent**: re-running it just re-asserts the same files
@@ -200,6 +252,9 @@ is running. The firmware streams regardless of DTR, so plain `termios` suffices.
 | `--tone-treble-pot NAME` | multisecond | firmware line driving treble |
 | `--tone-bass-invert` | off | reverse the bass pot direction |
 | `--tone-treble-invert` | off | reverse the treble pot direction |
+| `--power-button` / `--no-power-button` | on | short power-button press halts the Pi |
+| `--power-off-delay N` | 30 | seconds the Arduino waits before cutting the relay |
+| `--power-cmd CMD` | `systemctl poweroff` | command used to halt the Pi |
 
 The same values can be set as environment variables in
 `/usr/local/jukebox-pots/config.env` (`JP_*`), which the unit loads at start.

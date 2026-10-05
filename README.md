@@ -101,8 +101,11 @@ of them (including the tone). See
 
 ## Firmware
 
-- **Power relay** driven by a state machine: short press turns it on,
-  long press (≥ 5 s) performs a hard off; the button acts on release.
+- **Power relay** driven by a state machine: short press turns it on, short
+  press while on asks the host to shut down (`POWER: soft off`), long press
+  (≥ 5 s) performs an immediate hard off; the button acts on release. The relay
+  is cut by the Arduino after the Pi has halted (see
+  [Power button](software/jukebox-pots/README.md#power-button-soft-power-off)).
 - **Serial reporting** (9600 baud, only on change): volume/single/balance/
   multi second pots (with per-segment calibration tables), power tristate,
   power switch, multi push and rotary switch.
@@ -160,6 +163,68 @@ installed as-is, so a fresh or re-installed box gets the same keys (a one-off
 `--watch`. Install with `software/jukebox-keyboard/deploy.sh install`; see its
 [README](software/jukebox-keyboard/README.md).
 
+## Adding music over the network (SMB)
+
+Volumio already runs Samba (`smbd`/`nmbd`) with **guest** shares, so you don't
+need to touch the box at all — just drag files onto it from your computer. The
+Pi advertises itself on the LAN under **its own hostname**, so it shows up on its
+own under the network neighbourhood / "Network" in your file manager.
+
+### From the file manager (no password)
+
+- **Windows / File Explorer** — open **Network**; the box appears there by
+  itself (if it doesn't, type `\\<host>` — or `\\<pi-ip>` — in the address bar).
+- **macOS / Finder** — **Go ▸ Connect to Server…** (`⌘K`) and enter
+  `smb://<host>` (or `smb://<pi-ip>`).
+- **Linux / GNOME Files (Nautilus)** — **Other Locations ▸ smb://<host>**.
+
+| Share | What it is | Where it lands on the Pi |
+|---|---|---|
+| `Internal Storage` | the built-in disk: this is where music normally goes | `/data/INTERNAL` → `Music/` |
+| `USB` | whatever USB drive is plugged into the Pi | `/mnt/USB` |
+| `NAS` | a staging area for files destined for a NAS | `/mnt/NAS` |
+
+There is **no username or password** (the shares are `guest ok = yes`); connect
+as guest/anonymous and open the share you want. For permanent music on this box
+use **`Internal Storage`** and drop the files in the **`Music`** folder, i.e.
+`Internal Storage\Music\...`. The library shows every folder under the MPD music
+root, so anything you place in there is indexed.
+
+### From the command line
+
+```sh
+# Linux (mount at /mnt/jukebox; the share name has a space)
+sudo mkdir -p /mnt/jukebox
+sudo mount -t cifs '//<host>/Internal Storage' /mnt/jukebox \
+  -o guest,iocharset=utf8,file_mode=0777,dir_mode=0777
+cp -r ~/Music/* /mnt/jukebox/Music/
+sudo umount /mnt/jukebox
+
+# macOS
+open 'smb://<host>/Internal%20Storage'
+
+# smbclient (guest, one-off copy)
+smbclient '//<host>/Internal Storage' -N -c 'cd Music; lcd ~/Music; mput *'
+```
+
+### After copying: re-scan the library
+
+Volumio's MPD watches its folders but a full (re)scan is the reliable way to
+make new files appear. In the web UI: **Browse ▸ My Music ▸ Update** (or
+Settings ▸ Sources). The button posts MPD's database update, and from the
+command line `mpc` talks to the same daemon:
+
+```sh
+mpc update      # incremental: pick up new/changed files
+mpc rescan      # full re-read of the whole library
+```
+
+> Volumio's REST API does **not** expose `updateLibrary`/`rescan` (the UI uses a
+> socket), so `curl '.../api/v1/commands/?cmd=updateLibrary'` answers *command
+> not recognized* — use `mpc`, the UI button, or just wait for MPD to notice.
+> A file only becomes playable once MPD has it in its database, so if the UI
+> lists the file but playback fails or it's missing, run `mpc update`.
+
 ## Installing from scratch
 
 Everything below runs from a **development machine** (this repo) and drives the
@@ -181,15 +246,36 @@ The order matters: **player first, then the audio chain, then the pots.**
 There is also a top-level wrapper that drives all six packages in that order:
 
 ```sh
-./deploy-all.sh install     # every package, second output = usb
-./deploy-all.sh uninstall   # reverse order
-./deploy-all.sh verify
-./deploy-all.sh status
+./deploy-all.sh -H user@host install     # every package; second output = usb
+./deploy-all.sh -H user@host verify      # run every package's checks
+./deploy-all.sh -H user@host status      # show every package's state
+./deploy-all.sh -H user@host uninstall   # remove every package (reverse order)
+```
+
+The host is **required**: pass `-H/--host user@host` or set `JUKEBOX_HOST`
+(there is no built-in default). Use `-p <password>` (or `$JUKEBOX_PASSWORD`) when
+`sudo` on the box needs one:
+
+```sh
+./deploy-all.sh -H volumio@<host> -p <pass> install
+./deploy-all.sh -H volumio@<host> status
 ```
 
 It just sequences each package's own `deploy.sh`, so the per-package steps below
 are the same thing done by hand (and are still the way to pass package-specific
-options such as `--key-action`).
+options such as `--key-action`). For this box, `install` fixes the second output
+to `usb`. The pot power button (short press halts the Pi) is on by default;
+disable it per package with `--no-power-button`:
+
+```sh
+# one package at a time (same effect as the orchestrator, with its own flags)
+software/volumio/dual-output/deploy.sh  -H volumio@<host> -p <pass> install --second-output usb
+software/volumio/ui-boost/deploy.sh     -H volumio@<host> -p <pass> install
+software/jukebox-pots/deploy.sh         -H volumio@<host> -p <pass> install --power-off-delay 45
+software/volumio/pot-overlay/deploy.sh  -H volumio@<host> -p <pass> install
+software/volumio/ui-nav/deploy.sh       -H volumio@<host> -p <pass> install
+software/jukebox-keyboard/deploy.sh     -H volumio@<host> -p <pass> install --key-action next 1,4
+```
 
 ### Volumio (the live box)
 
@@ -210,11 +296,15 @@ options such as `--key-action`).
    the CamillaDSP tone step, and ends with a verification table that must say
    **All checks passed**.
 
-3. Install the potentiometer daemon (volume, balance, bass, treble):
+3. Install the potentiometer daemon (volume, balance, bass, treble). The pot
+   power button (short press halts the Pi, relay cut ~30 s later) is on by
+   default; `--no-power-button` / `--power-off-delay N` change that:
 
    ```sh
    cd software/jukebox-pots
-   ./deploy.sh --host volumio@<host> install
+   ./deploy.sh --host volumio@<host> install                       # power button on, 30 s
+   ./deploy.sh --host volumio@<host> install --no-power-button     # short press does nothing
+   ./deploy.sh --host volumio@<host> install --power-off-delay 45  # cut the relay after 45 s
    ```
 
    Then, for the on-screen indicator when moving balance/bass/treble pots:
@@ -250,11 +340,13 @@ options such as `--key-action`).
 6. **Reboot** so `alsa-restore`, the guard units and the pot daemon come up
    together, then play something and move the four pots.
 
-Verification any time (all packages at once, or a single one):
+Verification / state any time (all packages at once, or a single one):
 
 ```sh
-./deploy-all.sh verify                                  # every package
+./deploy-all.sh -H volumio@<host> verify                # every package
+./deploy-all.sh -H volumio@<host> status                # every package
 ./software/volumio/dual-output/deploy.sh --host volumio@<host> verify --with-playback
+./software/jukebox-pots/deploy.sh --host volumio@<host> status
 ```
 
 If `sudo` on the box needs a password, add `-p <password>` or export
@@ -267,7 +359,7 @@ If `sudo` on the box needs a password, add `-p <password>` or export
 | `software/volumio/dual-output` | ALSA split + CamillaDSP tone step + guards + MPD buffers for Volumio |
 | `software/volumio/pot-overlay` | On-screen balance/bass/treble indicator (overlay server + injected UI loader) |
 | `software/volumio/ui-nav` | UI navigation channel (a daemon can switch the screen; used by the open/close key) |
-| `software/jukebox-pots` | `jukebox-pots.service` (volume/balance/tone from the Arduino) |
+| `software/jukebox-pots` | `jukebox-pots.service` (volume/balance/tone from the Arduino; power button halts the Pi, on by default) |
 | `software/jukebox-keyboard` | `jukebox-keyboard.service` (play/pause/stop/prev/next/mute/clear/save-queue, favourite, open/close the queue view) |
 | `software/volumio/ui-boost` | Volumio-only touch UI performance fixes |
 

@@ -49,16 +49,28 @@ SSH in dependency order — `dual-output` → `ui-boost` → `jukebox-pots` →
 `pot-overlay` → `ui-nav` → `jukebox-keyboard` (reversed for uninstall):
 
 ```sh
-./deploy-all.sh install      # every package; second output fixed to usb
-./deploy-all.sh verify
-./deploy-all.sh status
-./deploy-all.sh uninstall
+./deploy-all.sh -H user@host install      # every package; second output fixed to usb
+./deploy-all.sh -H user@host verify
+./deploy-all.sh -H user@host status
+./deploy-all.sh -H user@host uninstall
+# password for sudo (host is required: -H or $JUKEBOX_HOST)
+./deploy-all.sh -H volumio@<host> -p <pass> install
 ```
 
-Defaults to `volumio@<host>`; use `-H volumio@<host>` and `-p <password>`
-(or `JUKEBOX_PASSWORD`). It just sequences each package's own `deploy.sh`, so
+The host is **required**: pass `-H user@host` (or set `JUKEBOX_HOST`); there is
+no built-in default. Use `-p <password>` (or `JUKEBOX_PASSWORD`) when `sudo` on
+the box needs one. It just sequences each package's own `deploy.sh`, so
 package-specific one-off options (`--second-output`, `--key-action`, …) still
-go through the per-package `deploy.sh`.
+go through the per-package `deploy.sh`. For this box `install` fixes the second
+output to `usb`. The pot power button (short press halts the Pi; relay cut after
+the Arduino-side delay) is on by default. Per package, for example:
+
+```sh
+software/jukebox-pots/deploy.sh -H volumio@<host> -p <pass> install
+software/jukebox-pots/deploy.sh -H volumio@<host> install --no-power-button
+software/jukebox-pots/deploy.sh -H volumio@<host> install --power-off-delay 45
+software/jukebox-keyboard/deploy.sh -H volumio@<host> install --key-action next 1,4
+```
 
 ## Expected state after login (checklist)
 
@@ -155,6 +167,15 @@ curl -s localhost:3000/api/v1/getState | grep -o '"volume":"[0-9]*"'
 **Play / pause / status:** `mpc play`, `mpc stop`, `mpc status` (MPD is
 Volumio's playback engine).
 
+**Add music over SMB:** the box runs Samba with guest shares and advertises
+itself as host **`Jukebox`**, so it shows up by itself in the file manager's
+Network view. Shares: `Internal Storage` (`/data/INTERNAL`), `USB`
+(`/mnt/USB`), `NAS` (`/mnt/NAS`) — no password, connect as guest. Put music in
+`Internal Storage/Music`. Mount from Linux with
+`sudo mount -t cifs '//<host>/Internal Storage' /mnt/jukebox -o guest`.
+After copying, rescan with `mpc update` (Volumio's REST API has **no**
+`updateLibrary`/`rescan` command; the UI button uses MPD's socket).
+
 **Check that both outputs are really playing:**
 ```sh
 mpc play; sleep 5
@@ -224,6 +245,9 @@ states above.
 | Pots do nothing but `jukebox-pots` is active | board not enumerated, wrong port, or `SoftMaster` missing | `sudo /usr/local/jukebox-pots/jukebox-pots.py --probe`; `journalctl -u jukebox-pots` |
 | Tone pots do nothing | tone off (`JB_TONE`), no CamillaDSP config, or the daemon can't write it | check `ls /usr/local/jukebox-audio/cdsp/`; `journalctl -u jukebox-pots \| grep tone`; reinstall `jukebox-audio` with tone on |
 | No sound after installing the tone | CamillaDSP `chunksize` too large for the cdsp pipe (deadlock, XRUN) | keep `chunksize: 512` in the tone template; `apply`; reinstall |
+| Power button short press does nothing | `JP_POWER_BUTTON=0` (disabled), or firmware not reflashed | install `jukebox-pots` without `--no-power-button`; reflash the PowerAndPots Arduino; check `journalctl -u jukebox-pots` |
+| Pi shuts down but the relay never cuts | firmware without the `POWER: off` command, or serial port dead at shutdown | reflash the Arduino; the cut is Arduino-side (`POWER_OFF_DELAY_MS`, default 30 s) |
+| Pi halts on a short press but you wanted a hard cut | long press (≥ 5 s) is the immediate cut; it also cancels a pending soft-off | hold the button ≥ 5 s |
 | Music plays a while, then Volumio says "failed to open output device" | player underrun escalated to a fatal XRUN (old plugin, or buffer too small) | update the plugin + `apply` (3 s buffer, silence concealment); check `mpd.log` for `XRUN`/`Broken pipe` |
 | Plays ~1 s (analyser blips) then stops; `mpd.log` shows `Error writing output config file` | active CamillaDSP config not writable by `mpd` (stale `root:0644` copy) | `chmod 0666 /var/lib/jukebox-audio/camilla-active.*.yml`, then `apply`; the plugin now writes it atomically with mode 0666 |
 | Tone stops after reboot | CamillaDSP config regenerated without gains | the installer preserves gains; re-check `grep gain /usr/local/jukebox-audio/cdsp/camilla.*.yml` |
@@ -244,7 +268,11 @@ states above.
   Arduino over USB serial and drives the DAC volume (Volumio API), balance
   (per-channel `SoftMaster`) and bass/treble (CamillaDSP config + `SIGHUP`, live).
   Install with `software/jukebox-pots/deploy.sh install`; check with `... status`.
-  It only touches the DAC branch, never the analyser feed.
+  It only touches the DAC branch, never the analyser feed. It also watches the
+  Arduino's `POWER:` lines: a short power-button press halts the Pi and the
+  Arduino cuts the relay ~30 s later (delay lives on the board, powered from
+  5VSB); the long press stays the immediate hard cut. On by default; disable
+  with `--no-power-button`.
 - `software/volumio/pot-overlay/` — on-screen circular indicator for balance /
   bass / treble (Volumio's own volume indicator covers volume only). The daemon
   POSTs each change to a tiny stdlib HTTP/SSE server (`/usr/local/jukebox-overlay`,

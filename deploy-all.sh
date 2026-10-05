@@ -17,14 +17,15 @@
 #   status       show each package's status
 #
 # Options:
-#   -H, --host HOST       SSH host (default: volumio@<host>)
+#   -H, --host HOST       SSH host, user@host (or set JUKEBOX_HOST); required
 #   -p, --password PASS   SSH/sudo password (default: $JUKEBOX_PASSWORD)
 #   -h, --help            this help
 #
-# Examples:
-#   ./deploy-all.sh install
-#   ./deploy-all.sh --host volumio@<host> verify
-#   ./deploy-all.sh uninstall
+# Examples (host is required: -H/--host or $JUKEBOX_HOST):
+#   ./deploy-all.sh -H user@host install
+#   ./deploy-all.sh -H user@host status
+#   ./deploy-all.sh -H user@host -p <password> install
+#   JUKEBOX_HOST=user@host ./deploy-all.sh verify
 #
 set -euo pipefail
 
@@ -40,11 +41,11 @@ PACKAGES=(
   software/jukebox-keyboard
 )
 
-HOST="volumio@<host>"
+HOST="${JUKEBOX_HOST:-}"
 SSH_PASS="${JUKEBOX_PASSWORD:-}"
 command="install"
 
-usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; }
 say()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ok()   { printf '    \033[1;32mok\033[0m   %s\n' "$*"; }
 die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -58,6 +59,8 @@ while [ $# -gt 0 ]; do
     *) die "unknown argument: $1 (see --help)" ;;
   esac
 done
+
+[ -n "$HOST" ] || die "no host given: use -H/--host user@host (or set JUKEBOX_HOST)"
 
 common=(-H "$HOST")
 [ -n "$SSH_PASS" ] && common+=(-p "$SSH_PASS")

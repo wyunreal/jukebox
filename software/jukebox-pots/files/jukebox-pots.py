@@ -122,6 +122,21 @@ TONE_POTS = {
 TONE_BASS_POT = _env("JP_TONE_BASS_POT", "single")
 TONE_TREBLE_POT = _env("JP_TONE_TREBLE_POT", "multisecond")
 
+# --- power button (soft power off) ------------------------------------------
+# The PowerAndPots Arduino runs the power state machine: a short press of the
+# power button prints "POWER: soft off" and leaves the relay on, a long press
+# cuts it immediately. When enabled (the default), that "soft off" makes the Pi
+# shut down cleanly. The relay must not be cut until the Pi has finished
+# halting, so the daemon sends "POWER: off <delay>" to the Arduino (which keeps
+# running from 5VSB and waits there; the Pi cannot send anything once it is
+# down) and only then powers itself off. Powering the Pi off is irreversible
+# and cannot be undone from software, so it can be disabled with
+# JP_POWER_BUTTON=0 and its sequence inspected with --poweroff-test.
+POWER_BUTTON = _env_bool("JP_POWER_BUTTON", True)
+POWER_CMD = _env("JP_POWER_CMD", "").split()          # override, e.g. "shutdown -h now"
+POWER_OFF_DELAY_S = _env_int("JP_POWER_OFF_DELAY_S", 30)
+POWER_RE = re.compile(r"^POWER:\s*soft off\b")
+
 
 def log(msg: str) -> None:
     print("%s %s" % (time.strftime("%Y-%m-%dT%H:%M:%S"), msg), flush=True)
@@ -210,6 +225,21 @@ def request_status(fd: int) -> None:
         os.write(fd, b"\n")
     except OSError:
         pass
+
+
+def send_power_command(fd: int, payload: bytes) -> None:
+    """Send one power command line to the firmware, twice.
+
+    Sent twice right away in case the first lands while the firmware is busy;
+    the parser is line-based and the repeats are idempotent (each just re-arms
+    or re-disarms the same thing).
+    """
+    for _ in range(2):
+        try:
+            os.write(fd, payload + b"\n")
+        except OSError:
+            return
+        time.sleep(0.05)
 
 
 def open_serial(path: str) -> int:
@@ -498,8 +528,39 @@ class Controller:
         self.warned_missing = False
         self.next_ensure = 0.0
         self.tone = ToneControl()
+        self.poweroff_handled = False
 
-    def feed(self, line: str) -> None:
+    def request_poweroff(self, fd: int) -> None:
+        """Act on the power button's "soft off": arm the relay then halt.
+
+        The relay cut is armed on the Arduino with the delay, and the Pi is
+        told to power off. Done once: after triggering there is nothing to
+        retry (either the halt takes over or the user can press again after a
+        restart). If the halt command cannot even be started, the pending cut
+        is cancelled so a stuck-Pi button press does not hard-cut the board.
+        """
+        if self.poweroff_handled:
+            return
+        self.poweroff_handled = True
+        log("power button: soft off -> powering the Pi off "
+            "(power relay cuts in %ds)" % POWER_OFF_DELAY_S)
+        send_power_command(fd, b"POWER: off %d" % POWER_OFF_DELAY_S)
+        cmd = POWER_CMD or ["systemctl", "poweroff"]
+        try:
+            subprocess.Popen(cmd)
+        except OSError as exc:
+            log("power button: cannot run %r: %s; cancelling the relay cut"
+                % (cmd, exc))
+            send_power_command(fd, b"POWER: cancel")
+            self.poweroff_handled = False
+
+    def feed(self, line: str, fd: int) -> None:
+        if POWER_RE.match(line):
+            if POWER_BUTTON:
+                self.request_poweroff(fd)
+            else:
+                log("power button pressed (soft off) but JP_POWER_BUTTON is off")
+            return
         m = VOLUMIO_RE.match(line)
         if m:
             value = int(m.group(1))
@@ -575,6 +636,8 @@ def probe() -> int:
     for path in sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*")):
         print("candidate     : %s -> %s" % (path, _usb_product(path) or "<unknown product>"))
     print("SoftMaster    : %s" % (read_softmaster(),))
+    print("power button  : %s (delay %ds)" % (
+        "enabled" if POWER_BUTTON else "disabled", POWER_OFF_DELAY_S))
     if port:
         try:
             fd = open_serial(port)
@@ -605,6 +668,9 @@ def selftest() -> int:
     assert balance_lr(99, 1.0) == (0, 99)
     assert balance_lr(99, -1.0) == (99, 0)
     assert balance_lr(50, 0.5) == (25, 50)
+    assert POWER_RE.match("POWER: soft off")
+    assert not POWER_RE.match("POWER: hard off")
+    assert not POWER_RE.match("POWER: ON")
     print("selftest ok")
     return 0
 
@@ -620,12 +686,22 @@ def main() -> int:
                         help="run the mapping self-tests and exit")
     parser.add_argument("--once", action="store_true",
                         help="apply the current mixer state once and exit")
+    parser.add_argument("--poweroff-test", action="store_true",
+                        help="show the power-off sequence (Arduino message + halt "
+                             "command) and exit, without touching the Arduino")
     args = parser.parse_args()
 
     if args.selftest:
         return selftest()
     if args.probe:
         return probe()
+    if args.poweroff_test:
+        print("power button : %s" % ("enabled (JP_POWER_BUTTON=1)" if POWER_BUTTON
+                                     else "disabled (JP_POWER_BUTTON=0)"))
+        print("delay        : %d s (relay cuts this long after the message)" % POWER_OFF_DELAY_S)
+        print("halt command : %s" % " ".join(POWER_CMD or ["systemctl", "poweroff"]))
+        print('to Arduino   : "POWER: off %d"' % POWER_OFF_DELAY_S)
+        return 0
 
     if not DAC_CARD:
         log("JP_DAC_CARD is not set; cannot pick the mixer card")
@@ -665,7 +741,7 @@ def main() -> int:
 
             lines, alive = read_lines(fd, POLL_MS / 1000.0)
             for line in lines:
-                controller.feed(line)
+                controller.feed(line, fd)
             if not alive:
                 log("lost %s (unplugged?)" % port)
                 os.close(fd)

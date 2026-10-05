@@ -6,7 +6,7 @@
 #   ./deploy.sh [options] [command]
 #
 # Options:
-#   -H, --host HOST     SSH host (default: volumio@<host>)
+#   -H, --host HOST     SSH host, user@host (or set JUKEBOX_HOST); required
 #   -p, --password PASS SSH/sudo password (default: $JUKEBOX_PASSWORD)
 #   -i, --identity FILE SSH private key
 #   -n, --dry-run       show what would be done, do not change anything
@@ -24,7 +24,7 @@
 #
 set -euo pipefail
 
-HOST="volumio@<host>"
+HOST="${JUKEBOX_HOST:-}"
 SSH_PASS="${JUKEBOX_PASSWORD:-}"
 IDENTITY=""
 DRY_RUN=0
@@ -95,6 +95,7 @@ main() {
     esac
   fi
 
+  [ -n "$HOST" ] || die "no host given: use -H/--host user@host (or set JUKEBOX_HOST)"
   [ -f "$LOCAL_DIR/$SCRIPT_NAME" ] || die "$SCRIPT_NAME not found next to deploy.sh"
   command -v ssh >/dev/null 2>&1 || die "ssh is not installed on this machine"
 

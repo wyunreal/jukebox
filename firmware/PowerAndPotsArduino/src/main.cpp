@@ -133,21 +133,36 @@ void setup() {
 }
 
 void loop() {
-  // Any byte received on the serial port asks for a full status report: mark
-  // every value as "never reported" so the next checks re-emit them all even
-  // though they have not changed. Used by the host (jukebox-pots) right after
-  // it opens the port, so it can seed volume/balance from the current pots.
-  if (Serial.available() > 0) {
-    while (Serial.available() > 0) Serial.read();
-    potVolume.value = NEVER;
-    potSingle.value = NEVER;
-    potBalance.value = NEVER;
-    potMultiSecond.value = NEVER;
-    powTristate.value = NEVER;
-    powSw.value = NEVER;
-    multiPush.value = NEVER;
-    rotary.value = NEVER;
+  // Serial input from the host (jukebox-pots): a "POWER: ..." command is
+  // handled, anything else asks for a full status report. The report request
+  // marks every value as "never reported" so the next checks re-emit them all
+  // even though they have not changed (used right after the host opens the
+  // port, to seed volume/balance from the current pots).
+  static char cmdBuf[32];
+  static byte cmdLen = 0;
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (cmdLen > 0 && strncmp(cmdBuf, "POWER:", 6) == 0) {
+        cmdBuf[cmdLen] = '\0';
+        handlePowerCommand(cmdBuf);
+      } else {
+        potVolume.value = NEVER;
+        potSingle.value = NEVER;
+        potBalance.value = NEVER;
+        potMultiSecond.value = NEVER;
+        powTristate.value = NEVER;
+        powSw.value = NEVER;
+        multiPush.value = NEVER;
+        rotary.value = NEVER;
+      }
+      cmdLen = 0;
+    } else if (cmdLen < sizeof(cmdBuf) - 1) {
+      cmdBuf[cmdLen++] = c;
+    }
   }
+
+  servicePowerOff();
 
   digitalWrite(POT_SINGLE_POWER_PIN, HIGH);
 

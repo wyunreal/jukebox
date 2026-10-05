@@ -40,6 +40,13 @@
 #   --tone-treble-pot NAME firmware line for treble: single|multisecond
 #   --tone-bass-invert / --no-tone-bass-invert
 #   --tone-treble-invert / --no-tone-treble-invert
+#   --power-button / --no-power-button
+#                          the Arduino's power button halts the Pi on a short
+#                          press (default: on); the relay is cut after the Pi
+#                          is down, with --power-off-delay seconds of margin
+#   --power-off-delay N    seconds the Arduino waits before cutting the relay
+#                          (default: 30)
+#   --power-cmd "CMD"      command used to halt the Pi (default: systemctl poweroff)
 #
 # Everything that lands on the host lives in files/ (readable, human) and is
 # copied or rendered from there; this script only orchestrates.
@@ -49,7 +56,7 @@
 #
 set -euo pipefail
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 
 APPLY_DIR="/usr/local/jukebox-pots"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -75,6 +82,9 @@ TONE_BASS_POT="single"
 TONE_TREBLE_POT="multisecond"
 TONE_BASS_INVERT="0"
 TONE_TREBLE_INVERT="0"
+POWER_BUTTON="1"
+POWER_OFF_DELAY="30"
+POWER_CMD=""
 
 # ------------------------------------------------------------------- helpers
 
@@ -86,7 +96,7 @@ die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 require_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 $*"; }
 
-usage() { sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
@@ -139,7 +149,9 @@ write_config() {
     "USE_API=$USE_API" "TONE_ENABLE=$TONE_ENABLE" "TONE_MAX_DB=$TONE_MAX_DB" \
     "TONE_CENTER=$TONE_CENTER" "TONE_SPAN=$TONE_SPAN" \
     "TONE_BASS_POT=$TONE_BASS_POT" "TONE_TREBLE_POT=$TONE_TREBLE_POT" \
-    "TONE_BASS_INVERT=$TONE_BASS_INVERT" "TONE_TREBLE_INVERT=$TONE_TREBLE_INVERT"
+    "TONE_BASS_INVERT=$TONE_BASS_INVERT" "TONE_TREBLE_INVERT=$TONE_TREBLE_INVERT" \
+    "POWER_BUTTON=$POWER_BUTTON" "POWER_OFF_DELAY_S=$POWER_OFF_DELAY" \
+    "POWER_CMD=$POWER_CMD"
 }
 
 install_files() {
@@ -180,6 +192,7 @@ cmd_install() {
   echo "    USB product  : $PRODUCT"
   echo "    volume       : pot 0..$POT_MAX -> 0..$VOLUME_MAX$([ "$VOLUME_INVERT" = 1 ] && echo ' (inverted)')"
   echo "    balance      : pot center $BALANCE_CENTER, span $BALANCE_SPAN$([ "$BALANCE_INVERT" = 1 ] && echo ' (inverted)')"
+  echo "    power button : $([ "$POWER_BUTTON" = 1 ] && echo "halts the Pi (relay off after ${POWER_OFF_DELAY}s)" || echo 'disabled')"
   local platform backend_desc
   platform="$(detect_platform)"
   if [ "$USE_API" = "1" ]; then
@@ -222,6 +235,9 @@ EOF
 cmd_verify() {
   require_root
   local rc=0 port
+  [ -f "$CONFIG_ENV" ] && . "$CONFIG_ENV" || true
+  POWER_BUTTON="${JP_POWER_BUTTON:-$POWER_BUTTON}"
+  POWER_OFF_DELAY="${JP_POWER_OFF_DELAY_S:-$POWER_OFF_DELAY}"
   say "Verification"
 
   if [ -x "$APPLY_DIR/jukebox-pots.py" ]; then
@@ -275,6 +291,12 @@ cmd_verify() {
     ok "SoftMaster volume control present on $DAC_CARD (DAC branch only)"
   else
     warn "SoftMaster not materialized yet (appears on first playback)"
+  fi
+
+  if [ "${POWER_BUTTON:-0}" = "1" ]; then
+    ok "power button: short press halts the Pi; relay cut after ${POWER_OFF_DELAY:-30}s (Arduino-side delay)"
+  else
+    warn "power button: disabled (--no-power-button): a short press won't halt the Pi"
   fi
 
   [ "$rc" = 0 ] && say "All checks passed" || say "$rc check(s) failed"
@@ -331,6 +353,12 @@ main() {
       --no-tone-bass-invert) TONE_BASS_INVERT=0; shift ;;
       --tone-treble-invert) TONE_TREBLE_INVERT=1; shift ;;
       --no-tone-treble-invert) TONE_TREBLE_INVERT=0; shift ;;
+      --power-button) POWER_BUTTON=1; shift ;;
+      --no-power-button) POWER_BUTTON=0; shift ;;
+      --power-off-delay) POWER_OFF_DELAY="$2"; shift 2 ;;
+      --power-off-delay=*) POWER_OFF_DELAY="${1#*=}"; shift ;;
+      --power-cmd) POWER_CMD="$2"; shift 2 ;;
+      --power-cmd=*) POWER_CMD="${1#*=}"; shift ;;
       -h|--help) usage; exit 0 ;;
       install|verify|status) mode="$1"; shift ;;
       *) die "unknown argument: $1" ;;

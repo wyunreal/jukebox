@@ -17,17 +17,55 @@ happen **on button release**:
 
 The long-press threshold lives in `POWER_LONG_PRESS_MS` (5000 ms).
 
+### Soft off → the host powers itself down
+
+`POWER: soft off` is a *request*, not an action: the host (the Raspberry Pi)
+turns it into a clean shutdown. The **jukebox-pots** daemon watches for that
+line and, when the power button is enabled, powers the Pi off and tells this
+board to cut the relay **afterwards**:
+
+```
+button short press --> POWER: soft off --> Pi: systemctl poweroff
+                                      \-> "POWER: off 30" --> relay OFF in 30 s
+```
+
+The relay must stay on while the Pi halts, and the Pi cannot send anything once
+it is down — but this board keeps running from 5VSB — so the **delay lives
+here**. On `POWER: off [N]` the firmware arms a cut `POWER_OFF_DELAY_MS`
+(default 30000 ms) later; the optional `N` (seconds, may be `0`) overrides it,
+so the host can tune the delay without reflashing. The cut prints
+`POWER: hard off` when it happens. A **long press** still cuts immediately and
+cancels any pending cut (`POWER: off cancelled`), which is also the escape
+hatch if the Pi hangs and never shuts down.
+
+> A second short press after the Pi has halted re-turns the relay on
+> (`POWER: ON`) without booting anything, because the Pi is down. Use the long
+> press to cut cleanly.
+
 ## Serial report
 
 Output over USB at 9600 baud. Values are only reported when they change,
 at most every 250 ms (`REPORT_INTERVAL_MS`). A `-----` separator is printed
 whenever anything is reported.
 
-**Status request.** Send any byte on the serial port and the firmware re-emits
-every value once, even if none changed. The host uses this right after opening
-the port (`jukebox-pots` writes a newline) so it can seed the volume and balance
-from the current pot positions — needed because the board may already be running
-(powered from 5VSB) when the Pi boots and would otherwise stay silent.
+**Status request.** Send a newline (or any line that does not start with
+`POWER:`) and the firmware re-emits every value once, even if none changed. The
+host uses this right after opening the port (`jukebox-pots` writes a newline) so
+it can seed the volume and balance from the current pot positions — needed
+because the board may already be running (powered from 5VSB) when the Pi boots
+and would otherwise stay silent.
+
+**Host commands.** A line beginning with `POWER:` is a command instead of a
+status request (the line ends at `\n`/`\r`):
+
+| Line from the host | Effect |
+|---|---|
+| `POWER: off` | arm a relay cut after `POWER_OFF_DELAY_MS` (30 s) |
+| `POWER: off N` | same, but cut after `N` seconds (may be `0`) |
+| `POWER: cancel` | disarm a pending cut (host could not shut down) |
+
+Any other input (including a lone newline) is the full status request above.
+
 
 ```
 POT volume: 15 (raw 700)
