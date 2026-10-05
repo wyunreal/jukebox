@@ -67,7 +67,7 @@
 #
 set -euo pipefail
 
-VERSION="1.2.1"
+VERSION="1.2.2"
 
 APPLY_DIR="/usr/local/jukebox-audio"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -1364,16 +1364,34 @@ PY
 }
 
 mpd_playback_test() {
-  local was_playing=0 dn jn hn un r=0 cur="" restored=0 v
+  local was_playing=0 dn jn hn un r=0 cur="" restored=0 v added=0 track
   v="$(live_variant)"
   mpc status 2>/dev/null | grep -q '\[playing\]' && was_playing=1
+
   if [ "$was_playing" = 0 ]; then
+    # The queue is often empty (e.g. right after a reboot) and then `mpc play`
+    # does nothing and the test would fail for no good reason. Pull a track
+    # from the library so there is something to play, and remember to clean it
+    # up afterwards (the queue was empty, so clearing restores it exactly).
+    if ! mpc playlist 2>/dev/null | grep -q .; then
+      track="$(mpc listall 2>/dev/null | head -1)"
+      if [ -z "$track" ]; then
+        warn "no track in the MPD queue or library; skipping MPD playback test"
+        return 0
+      fi
+      if mpc add "$track" >/dev/null 2>&1; then
+        added=1
+        ok "queue was empty; added a track for the test ($track)"
+      fi
+    fi
     if ! mpc play >/dev/null 2>&1; then
-      warn "MPD queue is empty; skipping MPD playback test"
+      warn "could not start MPD playback; skipping MPD playback test"
+      [ "$added" = 1 ] && mpc clear >/dev/null 2>&1 || true
       return 0
     fi
     sleep 4
   fi
+
   cur="$(amixer -c "$DAC_CARD" sget SoftMaster 2>/dev/null \
         | sed -n 's/.*Playback \([0-9]*\) \[\([0-9]*%\)\].*/\2/p' | head -1)"
   if [ -n "$cur" ]; then
@@ -1394,6 +1412,7 @@ mpd_playback_test() {
     amixer -q -c "$DAC_CARD" sset SoftMaster "$cur" >/dev/null 2>&1 || true
   fi
   [ "$was_playing" = 0 ] && mpc stop >/dev/null 2>&1 || true
+  [ "$added" = 1 ] && mpc clear >/dev/null 2>&1 || true
   return $r
 }
 

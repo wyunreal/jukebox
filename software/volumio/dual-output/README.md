@@ -99,8 +99,11 @@ A reboot is recommended after installing.
 
 `verify` checks the ALSA chain, the volume-control binding, MPD settings,
 the second output state (USB card / HDMI EDID / jack level) and opens the
-chain on both outputs. With `--with-playback` it also plays the current MPD
-queue briefly (at low volume) to check the real playback path.
+chain on both outputs. With `--with-playback` it also plays the MPD queue
+briefly (at low volume) to check the real playback path; if the queue is empty
+(e.g. right after a reboot) it pulls a track from the library so there is
+something to play, then cleans it up — the test only fails if the audio path is
+really broken, not because the queue happened to be empty.
 
 ## How it works
 
