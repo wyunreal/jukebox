@@ -1,0 +1,62 @@
+/* jukebox pot overlay: circular indicator for balance / bass / treble.
+   Reuses Volumio's own knob look (.knobWrapper / .knobInfosWrapper from the UI
+   stylesheet) and the jQuery-knob plugin already bundled with the UI, so it
+   matches the volume scrim exactly. */
+
+#jkOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  pointer-events: none;
+}
+#jkOverlay.jk-show { display: flex; }
+
+/* Volumio's own volume indicator has no dimming behind it, so neither do we. */
+#jkOverlay .jk-scrim {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+}
+
+/* Sit above the scrim; the knob itself comes from jQuery-knob. */
+#jkOverlay .knobWrapper {
+  position: relative;
+  z-index: 1;
+}
+
+/* Center the inner text both ways (Volumio's own wrapper is left-aligned and
+   relies on a sibling text-align:center that we don't have here). */
+#jkOverlay .knobInfosWrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+#jkOverlay .knobInfosWrapper .headerText {
+  height: auto;
+  margin-top: 0;
+  font-size: 12px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+#jkOverlay .knobInfosWrapper .headerText.green { color: #68c28d; }
+#jkOverlay .knobInfosWrapper .bigText {
+  height: auto;
+  margin-top: 6px;
+  line-height: 1;
+  font-size: 50px;
+  color: #fff;
+}
+/* Letters (CENTER / L 30 ...) need to be smaller than a 2-digit volume. */
+#jkOverlay .knobInfosWrapper .bigText.jk-long { font-size: 34px; }
+#jkOverlay .knobInfosWrapper .smallText {
+  height: auto;
+  margin-top: 4px;
+  font-size: 15px;
+  color: #cccccc;
+}

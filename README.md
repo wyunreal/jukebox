@@ -39,6 +39,12 @@ software/volumio/              # Volumio flavour (the live box)
 │   ├── libasound_module_pcm_cdsp.so  # cdsp ALSA plugin (armhf, patched)
 │   ├── cdsp/                   # plugin source (patched) + strrep.h
 │   └── README.md               # design doc: ALSA split, tone, variants, fail-safe
+├── pot-overlay/                # on-screen indicator for balance/bass/treble
+│   ├── jukebox-overlay.py      # dependency-free HTTP/SSE server (port 3210)
+│   ├── overlay.js / overlay.css  # UI overlay (reuses Volumio's knob)
+│   ├── apply.sh                # (re)inject the loader into the UI pages
+│   ├── install.sh / deploy.sh  # installer + SSH wrapper
+│   └── README.md               # design doc: how the overlay is wired
 └── ui-boost/                   # touch UI performance kit for Volumio
 
 software/jukebox-pots/          # pot volume/balance/tone from the Arduino
@@ -112,6 +118,12 @@ drives the DAC volume, balance and tone, leaving the analyser output untouched.
 Install with `software/jukebox-pots/deploy.sh install`; see its
 [README](software/jukebox-pots/README.md).
 
+Moving a pot shows an on-screen indicator (a circular knob identical to
+Volumio's own volume indicator) for **balance**, **bass** and **treble** — the
+latter two are not part of Volumio's state, so `software/volumio/pot-overlay`
+adds a small local SSE server that the daemon feeds and the UI renders; see its
+[README](software/volumio/pot-overlay/README.md).
+
 ## Installing from scratch
 
 Everything below runs from a **development machine** (this repo) and drives the
@@ -156,6 +168,13 @@ The order matters: **player first, then the audio chain, then the pots.**
    ./deploy.sh --host volumio@<host> install
    ```
 
+   Then, for the on-screen indicator when moving balance/bass/treble pots:
+
+   ```sh
+   cd software/volumio/pot-overlay
+   ./deploy.sh --host volumio@<host> install
+   ```
+
 4. *(Optional)* Speed up the touch UI (GPU compositing, no blur, correct DSI
    resolution). This one runs on the Pi itself:
 
@@ -185,6 +204,7 @@ If `sudo` on the box needs a password, add `-p <password>` or export
 | Package | What it installs |
 |---|---|
 | `software/volumio/dual-output` | ALSA split + CamillaDSP tone step + guards + MPD buffers for Volumio |
+| `software/volumio/pot-overlay` | On-screen balance/bass/treble indicator (overlay server + injected UI loader) |
 | `software/jukebox-pots` | `jukebox-pots.service` (volume/balance/tone from the Arduino) |
 | `software/volumio/ui-boost` | Volumio-only touch UI performance fixes |
 

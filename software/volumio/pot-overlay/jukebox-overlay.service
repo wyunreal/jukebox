@@ -1,0 +1,14 @@
+[Unit]
+Description=Jukebox pot overlay server (balance/bass/treble indicator)
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/usr/local/jukebox-overlay/config.env
+ExecStart=/usr/local/jukebox-overlay/jukebox-overlay.py
+Restart=always
+RestartSec=3
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

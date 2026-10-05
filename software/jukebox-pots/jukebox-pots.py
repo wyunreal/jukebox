@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import re
 import select
@@ -72,6 +73,13 @@ BAUD = _env_int("JP_BAUD", 9600)
 # addressable without tying it to a physical USB port.  It shows up both in
 # /dev/serial/by-id and in the sysfs "product" attribute.
 PRODUCT_MATCH = _env("JP_PRODUCT", "Jukebox Pots")
+
+# Optional overlay: POST every balance/bass/treble change to the jukebox-overlay
+# server so the UI can show a circular indicator next to the volume one.  It is
+# best-effort: if the overlay is not installed the POST fails fast and is
+# ignored.
+OVERLAY_ENABLED = _env_bool("JP_OVERLAY", True)
+OVERLAY_URL = _env("JP_OVERLAY_URL", "http://localhost:3210/update")
 
 VOLUMIO = _env("JP_VOLUMIO", "localhost:3000")
 USE_API = _env_bool("JP_USE_API", True)
@@ -348,6 +356,22 @@ def set_volume(percent: int) -> bool:
     return write_softmaster(raw, raw)
 
 
+def notify_overlay(kind: str, **fields) -> None:
+    """Best-effort POST of a pot change to the jukebox-overlay server."""
+    if not OVERLAY_ENABLED:
+        return
+    payload = {"type": kind}
+    payload.update(fields)
+    data = json.dumps(payload).encode()
+    try:
+        req = urllib.request.Request(OVERLAY_URL, data=data,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            resp.read()
+    except Exception:
+        pass  # overlay not installed / not reachable
+
+
 # ---------------------------------------------------------------------- tone
 
 
@@ -363,9 +387,15 @@ class ToneControl:
 
     def pot_feed(self, name: str, value: int) -> None:
         if name == TONE_BASS_POT:
-            self.bass_db = map_tone(value, invert=TONE_BASS_INVERT)
+            db = map_tone(value, invert=TONE_BASS_INVERT)
+            if db != self.bass_db:
+                self.bass_db = db
+                notify_overlay("bass", db=round(db, 2))
         elif name == TONE_TREBLE_POT:
-            self.treble_db = map_tone(value, invert=TONE_TREBLE_INVERT)
+            db = map_tone(value, invert=TONE_TREBLE_INVERT)
+            if db != self.treble_db:
+                self.treble_db = db
+                notify_overlay("treble", db=round(db, 2))
 
     def _active_variant(self) -> str | None:
         for v in TONE_VARIANTS:
@@ -462,6 +492,7 @@ class Controller:
         self.pot_volume: int | None = None
         self.pot_balance: int | None = None
         self.last_api: int | None = None
+        self.last_pan: float | None = None
         self.volume_dirty = False
         self.warned_missing = False
         self.next_ensure = 0.0
@@ -501,6 +532,9 @@ class Controller:
         if self.pot_balance is None:
             return
         pan = map_balance(self.pot_balance)
+        if round(pan, 3) != self.last_pan:
+            self.last_pan = round(pan, 3)
+            notify_overlay("balance", pan=round(pan, 3))
         current = read_softmaster()
         if current is None:
             if not self.warned_missing:

@@ -58,6 +58,7 @@ credentials into files.
 | Tool | `sudo /usr/local/jukebox-audio/jukebox-audio.sh status` | `second output: usb`, `live variant: usb` |
 | UI boost | `sudo /usr/local/jukebox-ui/jukebox-ui.sh verify` | all `ok`, X screen `800x480` |
 | UI guard | `systemctl is-active jukebox-ui-guard.path` | `active` |
+| Pot overlay | `systemctl is-active jukebox-overlay.service` | `active` (port 3210) |
 
 If the USB card is unplugged, the chain automatically falls back to DAC-only
 (speakers keep playing); plug it back and the guard/udev re-activates the split
@@ -204,6 +205,8 @@ states above.
 | Plays ~1 s (analyser blips) then stops; `mpd.log` shows `Error writing output config file` | active CamillaDSP config not writable by `mpd` (stale `root:0644` copy) | `chmod 0666 /var/lib/jukebox-audio/camilla-active.*.yml`, then `apply`; the plugin now writes it atomically with mode 0666 |
 | Tone stops after reboot | CamillaDSP config regenerated without gains | the installer preserves gains; re-check `grep gain /usr/local/jukebox-audio/cdsp/camilla.*.yml` |
 | Chain refuses to open | files hand-edited and guard reverted mid-play, or device busy | `mpc stop`; `apply`; `verify --with-playback` |
+| Overlay never shows | server down, nothing connected, or UI loader gone | `systemctl status jukebox-overlay`; `curl localhost:3210/state`; `sudo /usr/local/jukebox-overlay/apply.sh`; restart `volumio-kiosk` |
+| Overlay gone after a Volumio update | `index.html` rewritten | `systemctl start jukebox-overlay-guard.service` (re-injects), or re-run `apply.sh` |
 
 ## Repo map (for reference)
 
@@ -216,6 +219,13 @@ states above.
   (per-channel `SoftMaster`) and bass/treble (CamillaDSP config + `SIGHUP`, live).
   Install with `software/jukebox-pots/deploy.sh install`; check with `... status`.
   It only touches the DAC branch, never the analyser feed.
+- `software/volumio/pot-overlay/` — on-screen circular indicator for balance /
+  bass / treble (Volumio's own volume indicator covers volume only). The daemon
+  POSTs each change to a tiny stdlib HTTP/SSE server (`/usr/local/jukebox-overlay`,
+  port 3210) and the UI loads `overlay.js` (injected into `/volumio/http/www*/index.html`
+  by `apply.sh`, kept in place by `jukebox-overlay-guard.path`). The client reuses
+  the UI's bundled jQuery-knob so it looks like the volume indicator. Install with
+  `software/volumio/pot-overlay/deploy.sh install` (after jukebox-pots).
 - This skill lives in `skills/jukebox/`.
 
 When the user asks for jukebox work and anything looks different from this
