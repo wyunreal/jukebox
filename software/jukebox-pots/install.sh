@@ -15,7 +15,8 @@
 #   sudo ./install.sh                 # install / re-assert
 #   sudo ./install.sh install
 #   sudo ./install.sh status
-#   sudo ./install.sh uninstall
+#
+# Undo with ./uninstall.sh (or deploy.sh uninstall).
 #
 # Options:
 #   --dac-card NAME        ALSA card id of the DAC (default: auto-detect)
@@ -40,12 +41,15 @@
 #   --tone-bass-invert / --no-tone-bass-invert
 #   --tone-treble-invert / --no-tone-treble-invert
 #
+# Everything that lands on the host lives in files/ (readable, human) and is
+# copied or rendered from there; this script only orchestrates.
+#
 # From a development machine use deploy.sh, which copies this directory over
 # SSH and runs this script remotely.
 #
 set -euo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 APPLY_DIR="/usr/local/jukebox-pots"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -82,9 +86,23 @@ die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 require_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 $*"; }
 
-usage() { sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+FILES_DIR="$SCRIPT_DIR/files"
+
+# render_template TEMPLATE OUT NAME=VALUE ...  -> replaces @NAME@ placeholders.
+render_template() {
+  local tmpl="$1" out="$2"; shift 2
+  local sedargs=() kv name val
+  for kv in "$@"; do
+    name="${kv%%=*}"
+    val="${kv#*=}"
+    val="$(printf '%s' "$val" | sed -e 's/[&\\|]/\\&/g')"
+    sedargs+=(-e "s|@${name}@|${val}|g")
+  done
+  sed "${sedargs[@]}" "$tmpl" >"$out"
+}
 
 detect_dac_card() {
   local f id
@@ -113,61 +131,27 @@ detect_platform() {
 
 write_config() {
   mkdir -p "$APPLY_DIR"
-  cat >"$CONFIG_ENV" <<EOF
-# jukebox-pots settings (edited by install.sh; read by the service)
-JP_DAC_CARD=$DAC_CARD
-JP_PORT=$PORT
-JP_PRODUCT=$PRODUCT
-JP_BAUD=$BAUD
-JP_OVERLAY=1
-JP_OVERLAY_URL=http://localhost:3210/update
-JP_VOLUME_MAX=$VOLUME_MAX
-JP_POT_MAX=$POT_MAX
-JP_BALANCE_CENTER=$BALANCE_CENTER
-JP_BALANCE_SPAN=$BALANCE_SPAN
-JP_VOLUME_INVERT=$VOLUME_INVERT
-JP_BALANCE_INVERT=$BALANCE_INVERT
-JP_USE_API=$USE_API
-JP_TONE=$TONE_ENABLE
-JP_TONE_MAX_DB=$TONE_MAX_DB
-JP_TONE_CENTER=$TONE_CENTER
-JP_TONE_SPAN=$TONE_SPAN
-JP_TONE_BASS_POT=$TONE_BASS_POT
-JP_TONE_TREBLE_POT=$TONE_TREBLE_POT
-JP_TONE_BASS_INVERT=$TONE_BASS_INVERT
-JP_TONE_TREBLE_INVERT=$TONE_TREBLE_INVERT
-EOF
+  render_template "$FILES_DIR/config.env.in" "$CONFIG_ENV" \
+    "DAC_CARD=$DAC_CARD" "PORT=$PORT" "PRODUCT=$PRODUCT" "BAUD=$BAUD" \
+    "VOLUME_MAX=$VOLUME_MAX" "POT_MAX=$POT_MAX" \
+    "BALANCE_CENTER=$BALANCE_CENTER" "BALANCE_SPAN=$BALANCE_SPAN" \
+    "VOLUME_INVERT=$VOLUME_INVERT" "BALANCE_INVERT=$BALANCE_INVERT" \
+    "USE_API=$USE_API" "TONE_ENABLE=$TONE_ENABLE" "TONE_MAX_DB=$TONE_MAX_DB" \
+    "TONE_CENTER=$TONE_CENTER" "TONE_SPAN=$TONE_SPAN" \
+    "TONE_BASS_POT=$TONE_BASS_POT" "TONE_TREBLE_POT=$TONE_TREBLE_POT" \
+    "TONE_BASS_INVERT=$TONE_BASS_INVERT" "TONE_TREBLE_INVERT=$TONE_TREBLE_INVERT"
 }
 
 install_files() {
   mkdir -p "$APPLY_DIR"
-  install -m 0755 "$SCRIPT_DIR/jukebox-pots.py" "$APPLY_DIR/jukebox-pots.py"
+  install -m 0755 "$FILES_DIR/jukebox-pots.py" "$APPLY_DIR/jukebox-pots.py"
   echo "$VERSION" >"$APPLY_DIR/VERSION"
   write_config
 }
 
 install_unit() {
-  cat >"$UNIT" <<EOF
-[Unit]
-Description=Jukebox pot volume/balance (PowerAndPots Arduino)
-After=volumio.service sound.target
-Wants=volumio.service
-
-[Service]
-Type=simple
-EnvironmentFile=-$CONFIG_ENV
-ExecStart=$APPLY_DIR/jukebox-pots.py
-Restart=always
-RestartSec=3
-Nice=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  cat >"$UDEV_RULE" <<'EOF'
-# Rescan for the PowerAndPots Arduino as soon as its serial port appears.
-ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyACM*|ttyUSB*", RUN+="/usr/bin/systemctl --no-block restart jukebox-pots.service"
-EOF
+  install -m 0644 "$FILES_DIR/jukebox-pots.service" "$UNIT"
+  install -m 0644 "$FILES_DIR/89-jukebox-pots.rules" "$UDEV_RULE"
   systemctl daemon-reload
   udevadm control --reload-rules >/dev/null 2>&1 || true
 }
@@ -183,6 +167,7 @@ enable_service() {
 
 cmd_install() {
   require_root
+  [ -f "$FILES_DIR/jukebox-pots.py" ] || die "files/ not found next to install.sh"
   if [ -z "$DAC_CARD" ]; then
     DAC_CARD="$(detect_dac_card)" \
       || die "could not detect the I2S DAC in /proc/asound (pass --dac-card)"
@@ -230,7 +215,7 @@ cmd_install() {
 
     * Logs      : journalctl -u jukebox-pots -f
     * Status    : sudo $0 status
-    * Revert    : sudo $0 uninstall
+    * Revert    : sudo ./uninstall.sh
 EOF
 }
 
@@ -310,17 +295,6 @@ cmd_status() {
   fi
 }
 
-cmd_uninstall() {
-  require_root
-  say "Uninstalling jukebox-pots"
-  systemctl disable --now jukebox-pots.service >/dev/null 2>&1 || true
-  rm -f "$UNIT" "$UDEV_RULE"
-  systemctl daemon-reload
-  udevadm control --reload-rules >/dev/null 2>&1 || true
-  rm -rf "$APPLY_DIR"
-  ok "service, unit, udev rule and files removed"
-}
-
 main() {
   local mode="install"
   while [ $# -gt 0 ]; do
@@ -358,7 +332,7 @@ main() {
       --tone-treble-invert) TONE_TREBLE_INVERT=1; shift ;;
       --no-tone-treble-invert) TONE_TREBLE_INVERT=0; shift ;;
       -h|--help) usage; exit 0 ;;
-      install|verify|status|uninstall) mode="$1"; shift ;;
+      install|verify|status) mode="$1"; shift ;;
       *) die "unknown argument: $1" ;;
     esac
   done
@@ -366,7 +340,6 @@ main() {
     install)   cmd_install ;;
     verify)    cmd_verify ;;
     status)    cmd_status ;;
-    uninstall) cmd_uninstall ;;
   esac
 }
 

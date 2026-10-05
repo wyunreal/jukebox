@@ -43,7 +43,12 @@ daemon (e.g. jukebox-keyboard)  --POST /update-->  jukebox-ui-nav (this package)
 
 ```sh
 ./deploy.sh --host volumio@<host> install
+./deploy.sh --host volumio@<host> uninstall
 ```
+
+Layout: `install.sh` / `uninstall.sh` / `deploy.sh` are the scripts; everything
+that lands on the host is in `files/` (`ui-nav.py`, `ui-nav.js`, `apply.sh`,
+`uninject.py`, the units and `config.env.in`).
 
 Test the channel by hand:
 

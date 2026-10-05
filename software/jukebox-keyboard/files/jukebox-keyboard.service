@@ -1,0 +1,15 @@
+[Unit]
+Description=Jukebox keyboard playback keys (KeyboardArduino)
+After=volumio.service sound.target
+Wants=volumio.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/usr/local/jukebox-keyboard/config.env
+ExecStart=/usr/local/jukebox-keyboard/jukebox-keyboard.py
+Restart=always
+RestartSec=3
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

@@ -13,7 +13,8 @@
 #   sudo ./install.sh                 # install / re-assert
 #   sudo ./install.sh status
 #   sudo ./install.sh verify
-#   sudo ./install.sh uninstall
+#
+# Undo with ./uninstall.sh (or deploy.sh uninstall).
 #
 # Options:
 #   --key-action ROW,COL    assign a key to an action; repeatable. Actions:
@@ -22,12 +23,15 @@
 #   --product STR           USB product string of the keyboard board
 #                           (default: "Jukebox Keyboard")
 #
+# Everything that lands on the host lives in files/ (readable, human) and is
+# copied or rendered from there; this script only orchestrates.
+#
 # From a development machine use deploy.sh, which copies this directory over
 # SSH and runs this script remotely.
 #
 set -euo pipefail
 
-VERSION="1.6.0"
+VERSION="1.7.0"
 
 APPLY_DIR="/usr/local/jukebox-keyboard"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -59,9 +63,23 @@ die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 require_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 $*"; }
 
-usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+FILES_DIR="$SCRIPT_DIR/files"
+
+# render_template TEMPLATE OUT NAME=VALUE ...  -> replaces @NAME@ placeholders.
+render_template() {
+  local tmpl="$1" out="$2"; shift 2
+  local sedargs=() kv name val
+  for kv in "$@"; do
+    name="${kv%%=*}"
+    val="${kv#*=}"
+    val="$(printf '%s' "$val" | sed -e 's/[&\\|]/\\&/g')"
+    sedargs+=(-e "s|@${name}@|${val}|g")
+  done
+  sed "${sedargs[@]}" "$tmpl" >"$out"
+}
 
 # Load a previous key map so re-running install keeps it unless overridden.
 load_existing_config() {
@@ -85,54 +103,24 @@ load_existing_config() {
 
 write_config() {
   mkdir -p "$APPLY_DIR"
-  cat >"$CONFIG_ENV" <<EOF
-# jukebox-keyboard settings (edited by install.sh; read by the service)
-JK_PORT=$PORT
-JK_PRODUCT=$PRODUCT
-JK_BAUD=$BAUD
-JK_NAV_URL=http://localhost:3211/update
-JK_KEY_PLAY=$KEY_PLAY
-JK_KEY_PAUSE=$KEY_PAUSE
-JK_KEY_STOP=$KEY_STOP
-JK_KEY_PREV=$KEY_PREV
-JK_KEY_NEXT=$KEY_NEXT
-JK_KEY_MUTE=$KEY_MUTE
-JK_KEY_OPENCLOSE=$KEY_OPENCLOSE
-JK_KEY_FAVOURITE=$KEY_FAVOURITE
-JK_KEY_CLEAR=$KEY_CLEAR
-JK_KEY_SAVEQUEUE=$KEY_SAVEQUEUE
-EOF
+  render_template "$FILES_DIR/config.env.in" "$CONFIG_ENV" \
+    "PORT=$PORT" "PRODUCT=$PRODUCT" "BAUD=$BAUD" \
+    "KEY_PLAY=$KEY_PLAY" "KEY_PAUSE=$KEY_PAUSE" "KEY_STOP=$KEY_STOP" \
+    "KEY_PREV=$KEY_PREV" "KEY_NEXT=$KEY_NEXT" "KEY_MUTE=$KEY_MUTE" \
+    "KEY_OPENCLOSE=$KEY_OPENCLOSE" "KEY_FAVOURITE=$KEY_FAVOURITE" \
+    "KEY_CLEAR=$KEY_CLEAR" "KEY_SAVEQUEUE=$KEY_SAVEQUEUE"
 }
 
 install_files() {
   mkdir -p "$APPLY_DIR"
-  install -m 0755 "$SCRIPT_DIR/jukebox-keyboard.py" "$APPLY_DIR/jukebox-keyboard.py"
+  install -m 0755 "$FILES_DIR/jukebox-keyboard.py" "$APPLY_DIR/jukebox-keyboard.py"
   echo "$VERSION" >"$APPLY_DIR/VERSION"
   write_config
 }
 
 install_unit() {
-  cat >"$UNIT" <<EOF
-[Unit]
-Description=Jukebox keyboard playback keys (KeyboardArduino)
-After=volumio.service sound.target
-Wants=volumio.service
-
-[Service]
-Type=simple
-EnvironmentFile=-$CONFIG_ENV
-ExecStart=$APPLY_DIR/jukebox-keyboard.py
-Restart=always
-RestartSec=3
-Nice=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  cat >"$UDEV_RULE" <<'EOF'
-# Rescan for the KeyboardArduino as soon as its serial port appears.
-ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyACM*|ttyUSB*", RUN+="/usr/bin/systemctl --no-block restart jukebox-keyboard.service"
-EOF
+  install -m 0644 "$FILES_DIR/jukebox-keyboard.service" "$UNIT"
+  install -m 0644 "$FILES_DIR/89-jukebox-keyboard.rules" "$UDEV_RULE"
   systemctl daemon-reload
   udevadm control --reload-rules >/dev/null 2>&1 || true
 }
@@ -158,6 +146,7 @@ keys_to_assign() {
 
 cmd_install() {
   require_root
+  [ -f "$FILES_DIR/jukebox-keyboard.py" ] || die "files/ not found next to install.sh"
   load_existing_config
 
   say "Installing jukebox-keyboard (v$VERSION)"
@@ -195,7 +184,7 @@ cmd_install() {
 
     * Identify keys : sudo $APPLY_DIR/jukebox-keyboard.py --watch
     * Logs          : journalctl -u jukebox-keyboard -f
-    * Revert        : sudo $0 uninstall
+    * Revert        : sudo ./uninstall.sh
 EOF
 }
 
@@ -235,17 +224,6 @@ cmd_status() {
   fi
 }
 
-cmd_uninstall() {
-  require_root
-  say "Uninstalling jukebox-keyboard"
-  systemctl disable --now jukebox-keyboard.service >/dev/null 2>&1 || true
-  rm -f "$UNIT" "$UDEV_RULE"
-  systemctl daemon-reload
-  udevadm control --reload-rules >/dev/null 2>&1 || true
-  rm -rf "$APPLY_DIR"
-  ok "service, unit, udev rule and files removed"
-}
-
 set_key() {
   case "$1" in
     play)  KEY_PLAY="$2" ;;
@@ -272,7 +250,7 @@ main() {
       --port=*) PORT="${1#*=}"; shift ;;
       --product) PRODUCT="$2"; shift 2 ;;
       --product=*) PRODUCT="${1#*=}"; shift ;;
-      install|verify|status|uninstall) mode="$1"; shift ;;
+      install|verify|status) mode="$1"; shift ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown argument: $1" ;;
     esac
@@ -281,7 +259,6 @@ main() {
     install) cmd_install ;;
     verify) cmd_verify ;;
     status) cmd_status ;;
-    uninstall) cmd_uninstall ;;
   esac
 }
 

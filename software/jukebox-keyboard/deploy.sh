@@ -32,7 +32,8 @@ DRY_RUN=0
 SCRIPT_NAME="install.sh"
 REMOTE_DIR="/tmp/jukebox-keyboard-deploy"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
-FILES=(install.sh jukebox-keyboard.py README.md)
+FILES=(install.sh uninstall.sh README.md)
+FILES_DIR="files"
 
 usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -107,15 +108,21 @@ main() {
   if [ "$DRY_RUN" = 1 ]; then
     ok "dry-run: skipping copy"
   else
-    run_ssh "mkdir -p $REMOTE_DIR"
+    run_ssh "mkdir -p $REMOTE_DIR/$FILES_DIR"
     local f
     for f in "${FILES[@]}"; do
       [ -f "$LOCAL_DIR/$f" ] && run_scp "$LOCAL_DIR/$f" "$HOST:$REMOTE_DIR/$f"
     done
+    if [ -d "$LOCAL_DIR/$FILES_DIR" ]; then
+      run_scp "$LOCAL_DIR/$FILES_DIR/"* "$HOST:$REMOTE_DIR/$FILES_DIR/"
+    fi
     ok "copied"
   fi
 
-  local remote_cmd="bash $REMOTE_DIR/$SCRIPT_NAME $command"
+  local runner="$SCRIPT_NAME"
+  [ "$command" = "uninstall" ] && runner="uninstall.sh"
+  local remote_cmd="bash $REMOTE_DIR/$runner $command"
+  [ "$command" = "uninstall" ] && remote_cmd="bash $REMOTE_DIR/$runner"
   if [ "${#remote_args[@]}" -gt 0 ]; then
     local a
     for a in "${remote_args[@]}"; do remote_cmd="$remote_cmd $(printf '%q' "$a")"; done

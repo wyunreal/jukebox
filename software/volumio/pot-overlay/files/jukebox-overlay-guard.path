@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch Volumio UI pages (re-inject the jukebox pot overlay)
+
+[Path]
+PathChanged=/volumio/http/www/index.html
+PathChanged=/volumio/http/www3/index.html
+PathChanged=/volumio/http/www4/index.html
+
+[Install]
+WantedBy=multi-user.target

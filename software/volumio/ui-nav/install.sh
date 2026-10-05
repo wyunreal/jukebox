@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 #
-# install.sh - install the jukebox UI navigation channel on a Volumio host.
+# install.sh - install the jukebox UI command channel on a Volumio host.
 #
-# Lets a local daemon ask the Volumio UI to change screen (used by the
-# keyboard's open/close key). A small local HTTP/SSE server carries the
-# command and a loader injected into the UI pages calls the UI's router.
+# Lets a local daemon ask the Volumio UI to change screen or toggle favourite
+# (used by the keyboard's open/close and favourite keys). A small local
+# HTTP/SSE server carries the command and a loader injected into the UI pages
+# calls the UI's router/services.
 #
 # Run ON the Volumio host as root:
 #   sudo ./install.sh            # install / re-assert
 #   sudo ./install.sh status
 #   sudo ./install.sh verify
-#   sudo ./install.sh uninstall
+#
+# Undo with ./uninstall.sh (or deploy.sh uninstall).
+#
+# Everything that lands on the host lives in files/ (readable, human) and is
+# copied or rendered from there; this script only orchestrates.
 #
 # From a development machine use deploy.sh.
 #
 set -euo pipefail
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 
 DEST="/usr/local/jukebox-ui-nav"
 CONFIG_ENV="$DEST/config.env"
@@ -35,42 +40,35 @@ die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 require_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 $*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+FILES_DIR="$SCRIPT_DIR/files"
+
+# render_template TEMPLATE OUT NAME=VALUE ...  -> replaces @NAME@ placeholders.
+render_template() {
+  local tmpl="$1" out="$2"; shift 2
+  local sedargs=() kv name val
+  for kv in "$@"; do
+    name="${kv%%=*}"
+    val="${kv#*=}"
+    val="$(printf '%s' "$val" | sed -e 's/[&\\|]/\\&/g')"
+    sedargs+=(-e "s|@${name}@|${val}|g")
+  done
+  sed "${sedargs[@]}" "$tmpl" >"$out"
+}
 
 install_files() {
   mkdir -p "$DEST"
-  install -m 0755 "$SCRIPT_DIR/ui-nav.py" "$DEST/ui-nav.py"
-  install -m 0755 "$SCRIPT_DIR/apply.sh" "$DEST/apply.sh"
-  install -m 0644 "$SCRIPT_DIR/ui-nav.js" "$DEST/ui-nav.js"
+  install -m 0755 "$FILES_DIR/ui-nav.py" "$DEST/ui-nav.py"
+  install -m 0755 "$FILES_DIR/apply.sh" "$DEST/apply.sh"
+  install -m 0644 "$FILES_DIR/ui-nav.js" "$DEST/ui-nav.js"
+  install -m 0755 "$FILES_DIR/uninject.py" "$DEST/uninject.py"
   echo "$VERSION" >"$DEST/VERSION"
-  cat >"$CONFIG_ENV" <<EOF
-# jukebox-ui-nav settings (edited by install.sh; read by the service)
-JK_NAV_PORT=$PORT
-JK_NAV_ROOT=$DEST
-EOF
+  render_template "$FILES_DIR/config.env.in" "$CONFIG_ENV" "PORT=$PORT"
 }
 
 install_units() {
-  install -m 0644 "$SCRIPT_DIR/jukebox-ui-nav.service" "$UNIT"
-  cat >"$GUARD_PATH" <<EOF
-[Unit]
-Description=Watch Volumio UI pages (re-inject the jukebox UI nav loader)
-
-[Path]
-PathChanged=/volumio/http/www/index.html
-PathChanged=/volumio/http/www3/index.html
-PathChanged=/volumio/http/www4/index.html
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  cat >"$GUARD_SERVICE" <<EOF
-[Unit]
-Description=Re-inject the jukebox UI nav loader into the Volumio UI
-
-[Service]
-Type=oneshot
-ExecStart=$DEST/apply.sh
-EOF
+  install -m 0644 "$FILES_DIR/jukebox-ui-nav.service" "$UNIT"
+  install -m 0644 "$FILES_DIR/jukebox-ui-nav-guard.path" "$GUARD_PATH"
+  install -m 0644 "$FILES_DIR/jukebox-ui-nav-guard.service" "$GUARD_SERVICE"
   systemctl daemon-reload
 }
 
@@ -102,12 +100,11 @@ cmd_install() {
 
   say "Done"
   cat <<EOF
-    A daemon can now ask the UI to switch screens:
+    A daemon can now ask the UI to switch screens or toggle a favourite:
       curl -sX POST -d '{"type":"nav","view":"toggle"}' http://localhost:$PORT/update
-    Needs a client to send it (e.g. the keyboard's open/close key).
 
     * Logs    : journalctl -u jukebox-ui-nav -f
-    * Revert  : sudo $0 uninstall
+    * Revert  : sudo ./uninstall.sh
 EOF
 }
 
@@ -154,41 +151,13 @@ cmd_status() {
   done
 }
 
-cmd_uninstall() {
-  require_root
-  say "Uninstalling jukebox-ui-nav"
-  systemctl disable --now jukebox-ui-nav-guard.path >/dev/null 2>&1 || true
-  systemctl disable --now jukebox-ui-nav.service >/dev/null 2>&1 || true
-  rm -f "$UNIT" "$GUARD_SERVICE" "$GUARD_PATH"
-  systemctl daemon-reload
-
-  python3 - <<'PY'
-import glob
-import re
-pat = re.compile(r'<script id="jk-ui-nav-loader">.*?</script>')
-for f in glob.glob("/volumio/http/www*/index.html"):
-    try:
-        s = open(f, encoding="utf-8").read()
-    except OSError:
-        continue
-    n = pat.sub("", s)
-    if n != s:
-        open(f, "w", encoding="utf-8").write(n)
-        print("cleaned " + f)
-PY
-
-  systemctl restart volumio-kiosk.service >/dev/null 2>&1 || true
-  rm -rf "$DEST"
-  ok "removed (server, guard, UI loader)"
-}
-
 main() {
   local mode="install"
   while [ $# -gt 0 ]; do
     case "$1" in
       --port) PORT="$2"; shift 2 ;;
       --port=*) PORT="${1#*=}"; shift ;;
-      install|verify|status|uninstall) mode="$1"; shift ;;
+      install|verify|status) mode="$1"; shift ;;
       -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
       *) die "unknown argument: $1" ;;
     esac
@@ -197,7 +166,6 @@ main() {
     install) cmd_install ;;
     verify) cmd_verify ;;
     status) cmd_status ;;
-    uninstall) cmd_uninstall ;;
   esac
 }
 

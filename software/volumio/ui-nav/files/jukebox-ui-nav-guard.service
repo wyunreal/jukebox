@@ -1,0 +1,6 @@
+[Unit]
+Description=Re-inject the jukebox UI nav loader into the Volumio UI
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/jukebox-ui-nav/apply.sh

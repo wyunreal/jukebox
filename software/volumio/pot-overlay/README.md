@@ -53,8 +53,12 @@ On the host:
 sudo ./install.sh            # install / re-assert
 sudo ./install.sh status
 sudo ./install.sh verify
-sudo ./install.sh uninstall
+sudo ./uninstall.sh          # remove
 ```
+
+Layout: `install.sh` / `uninstall.sh` / `deploy.sh` are the scripts; everything
+that lands on the host is in `files/` (`jukebox-overlay.py`, `overlay.js`,
+`overlay.css`, `apply.sh`, `uninject.py`, the units and `config.env.in`).
 
 ## Notes
 

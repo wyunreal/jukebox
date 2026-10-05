@@ -1,0 +1,2 @@
+# Rescan for the PowerAndPots Arduino as soon as its serial port appears.
+ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyACM*|ttyUSB*", RUN+="/usr/bin/systemctl --no-block restart jukebox-pots.service"

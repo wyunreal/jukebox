@@ -1,0 +1,6 @@
+[Unit]
+Description=Re-inject the jukebox pot overlay into the Volumio UI
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/jukebox-overlay/apply.sh

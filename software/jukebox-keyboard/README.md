@@ -14,9 +14,14 @@ USB port. The two Arduino Micros are identical, so the port would not be stable.
 ## Layout
 
 ```
-jukebox-keyboard.py    # daemon: serial -> Volumio commands
-install.sh             # installer / verify / status / uninstall (runs on the Pi)
-deploy.sh              # ship and run the installer over SSH
+install.sh             # installer / verify / status
+uninstall.sh           # remove the service, unit, udev rule and files
+deploy.sh              # ship and run install.sh/uninstall.sh over SSH
+files/                 # everything that lands on the host (readable, human)
+├── jukebox-keyboard.py
+├── jukebox-keyboard.service
+├── 89-jukebox-keyboard.rules
+└── config.env.in      # settings + key map template (@PLACEHOLDER@)
 README.md
 ```
 

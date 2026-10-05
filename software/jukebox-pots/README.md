@@ -101,7 +101,7 @@ and restarts the service. It will:
 ```sh
 ./deploy.sh status
 ./deploy.sh verify
-sudo ./install.sh uninstall
+./deploy.sh uninstall
 ```
 
 * `status` shows the detected port, its USB product string and the current
@@ -228,8 +228,13 @@ The same values can be set as environment variables in
 ## Layout
 
 ```
-install.sh            # idempotent installer (install/verify/status/uninstall)
-deploy.sh             # ship and run install.sh over SSH
-jukebox-pots.py       # the daemon (+ --probe and --selftest)
+install.sh            # idempotent installer (install/verify/status)
+uninstall.sh          # remove the service, unit, udev rule and files
+deploy.sh             # ship and run install.sh/uninstall.sh over SSH
+files/                # everything that lands on the host (readable, human)
+├── jukebox-pots.py   # the daemon (+ --probe and --selftest)
+├── jukebox-pots.service
+├── 89-jukebox-pots.rules
+└── config.env.in     # settings template (@PLACEHOLDER@ filled at install)
 README.md             # this file
 ```

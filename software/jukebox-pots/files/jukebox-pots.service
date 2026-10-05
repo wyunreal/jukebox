@@ -1,0 +1,15 @@
+[Unit]
+Description=Jukebox pot volume/balance (PowerAndPots Arduino)
+After=volumio.service sound.target
+Wants=volumio.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/usr/local/jukebox-pots/config.env
+ExecStart=/usr/local/jukebox-pots/jukebox-pots.py
+Restart=always
+RestartSec=3
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

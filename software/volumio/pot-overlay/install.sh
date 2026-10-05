@@ -12,17 +12,21 @@
 #   sudo ./install.sh            # install / re-assert
 #   sudo ./install.sh status
 #   sudo ./install.sh verify
-#   sudo ./install.sh uninstall
+#
+# Undo with ./uninstall.sh (or deploy.sh uninstall).
 #
 # Options:
 #   --port N     overlay server port (default: 3210)
+#
+# Everything that lands on the host lives in files/ (readable, human) and is
+# copied or rendered from there; this script only orchestrates.
 #
 # From a development machine use deploy.sh, which copies this directory over
 # SSH and runs this script remotely.
 #
 set -euo pipefail
 
-VERSION="1.5.0"
+VERSION="1.6.0"
 
 DEST="/usr/local/jukebox-overlay"
 CONFIG_ENV="$DEST/config.env"
@@ -41,43 +45,36 @@ die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 require_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 $*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+FILES_DIR="$SCRIPT_DIR/files"
+
+# render_template TEMPLATE OUT NAME=VALUE ...  -> replaces @NAME@ placeholders.
+render_template() {
+  local tmpl="$1" out="$2"; shift 2
+  local sedargs=() kv name val
+  for kv in "$@"; do
+    name="${kv%%=*}"
+    val="${kv#*=}"
+    val="$(printf '%s' "$val" | sed -e 's/[&\\|]/\\&/g')"
+    sedargs+=(-e "s|@${name}@|${val}|g")
+  done
+  sed "${sedargs[@]}" "$tmpl" >"$out"
+}
 
 install_files() {
   mkdir -p "$DEST"
-  install -m 0755 "$SCRIPT_DIR/jukebox-overlay.py" "$DEST/jukebox-overlay.py"
-  install -m 0755 "$SCRIPT_DIR/apply.sh" "$DEST/apply.sh"
-  install -m 0644 "$SCRIPT_DIR/overlay.js" "$DEST/overlay.js"
-  install -m 0644 "$SCRIPT_DIR/overlay.css" "$DEST/overlay.css"
+  install -m 0755 "$FILES_DIR/jukebox-overlay.py" "$DEST/jukebox-overlay.py"
+  install -m 0755 "$FILES_DIR/apply.sh" "$DEST/apply.sh"
+  install -m 0644 "$FILES_DIR/overlay.js" "$DEST/overlay.js"
+  install -m 0644 "$FILES_DIR/overlay.css" "$DEST/overlay.css"
+  install -m 0755 "$FILES_DIR/uninject.py" "$DEST/uninject.py"
   echo "$VERSION" >"$DEST/VERSION"
-  cat >"$CONFIG_ENV" <<EOF
-# jukebox-overlay settings (edited by install.sh; read by the service)
-JK_OVERLAY_PORT=$PORT
-JK_OVERLAY_ROOT=$DEST
-EOF
+  render_template "$FILES_DIR/config.env.in" "$CONFIG_ENV" "PORT=$PORT"
 }
 
 install_units() {
-  install -m 0644 "$SCRIPT_DIR/jukebox-overlay.service" "$UNIT"
-  cat >"$GUARD_PATH" <<EOF
-[Unit]
-Description=Watch Volumio UI pages (re-inject the jukebox pot overlay)
-
-[Path]
-PathChanged=/volumio/http/www/index.html
-PathChanged=/volumio/http/www3/index.html
-PathChanged=/volumio/http/www4/index.html
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  cat >"$GUARD_SERVICE" <<EOF
-[Unit]
-Description=Re-inject the jukebox pot overlay into the Volumio UI
-
-[Service]
-Type=oneshot
-ExecStart=$DEST/apply.sh
-EOF
+  install -m 0644 "$FILES_DIR/jukebox-overlay.service" "$UNIT"
+  install -m 0644 "$FILES_DIR/jukebox-overlay-guard.path" "$GUARD_PATH"
+  install -m 0644 "$FILES_DIR/jukebox-overlay-guard.service" "$GUARD_SERVICE"
   systemctl daemon-reload
 }
 
@@ -116,7 +113,7 @@ cmd_install() {
 
     * Server logs : journalctl -u jukebox-overlay -f
     * Test        : curl -s localhost:$PORT/overlay.js | head
-    * Revert      : sudo $0 uninstall
+    * Revert      : sudo ./uninstall.sh
 EOF
 }
 
@@ -164,42 +161,13 @@ cmd_status() {
   done
 }
 
-cmd_uninstall() {
-  require_root
-  say "Uninstalling jukebox-overlay"
-  systemctl disable --now jukebox-overlay-guard.path >/dev/null 2>&1 || true
-  systemctl disable --now jukebox-overlay.service >/dev/null 2>&1 || true
-  rm -f "$UNIT" "$GUARD_SERVICE" "$GUARD_PATH"
-  systemctl daemon-reload
-
-  # Strip the injected loader from the UI pages.
-  python3 - <<'PY'
-import glob
-import re
-pat = re.compile(r'<script id="jk-overlay-loader">.*?</script>')
-for f in glob.glob("/volumio/http/www*/index.html"):
-    try:
-        s = open(f, encoding="utf-8").read()
-    except OSError:
-        continue
-    n = pat.sub("", s)
-    if n != s:
-        open(f, "w", encoding="utf-8").write(n)
-        print("cleaned " + f)
-PY
-
-  systemctl restart volumio-kiosk.service >/dev/null 2>&1 || true
-  rm -rf "$DEST"
-  ok "removed (server, guard, UI loader)"
-}
-
 main() {
   local mode="install"
   while [ $# -gt 0 ]; do
     case "$1" in
       --port) PORT="$2"; shift 2 ;;
       --port=*) PORT="${1#*=}"; shift ;;
-      install|verify|status|uninstall) mode="$1"; shift ;;
+      install|verify|status) mode="$1"; shift ;;
       -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
       *) die "unknown argument: $1" ;;
     esac
@@ -208,7 +176,6 @@ main() {
     install) cmd_install ;;
     verify) cmd_verify ;;
     status) cmd_status ;;
-    uninstall) cmd_uninstall ;;
   esac
 }
 
