@@ -53,6 +53,12 @@ software/jukebox-pots/          # pot volume/balance/tone from the Arduino
 ├── deploy.sh                   # ship and run the installer over SSH
 └── README.md                   # design doc: mapping, detection, analyser safety
 
+software/jukebox-keyboard/      # playback keys from the KeyboardArduino
+├── jukebox-keyboard.py         # daemon: USB serial -> play/pause/stop/prev/next
+├── install.sh                  # idempotent installer (Volumio)
+├── deploy.sh                   # ship and run the installer over SSH
+└── README.md                   # design doc: key map, detection
+
 skills/jukebox/SKILL.md         # agent skill to operate and troubleshoot the box
 ```
 
@@ -124,6 +130,16 @@ latter two are not part of Volumio's state, so `software/volumio/pot-overlay`
 adds a small local SSE server that the daemon feeds and the UI renders; see its
 [README](software/volumio/pot-overlay/README.md).
 
+## Keyboard (playback keys)
+
+The KeyboardArduino's 4x4 button matrix drives playback. `software/jukebox-keyboard/`
+(`jukebox-keyboard.service`) reads its key events over USB serial and runs the
+matching Volumio command on key **press**: play, pause, stop, previous track and
+next track. The key → action map lives in its `config.env`
+(`JK_KEY_<action>=row,col`); identify a key with `--watch`. Install with
+`software/jukebox-keyboard/deploy.sh install --key-action play ROW,COL ...`; see
+its [README](software/jukebox-keyboard/README.md).
+
 ## Installing from scratch
 
 Everything below runs from a **development machine** (this repo) and drives the
@@ -186,7 +202,17 @@ The order matters: **player first, then the audio chain, then the pots.**
    ssh volumio@<host> 'sudo reboot'
    ```
 
-5. **Reboot** so `alsa-restore`, the guard units and the pot daemon come up
+5. *(Optional)* Wire the keyboard's playback keys. Identify each key with
+   `--watch` (press it and note the `row,col`) and assign the actions:
+
+   ```sh
+   cd software/jukebox-keyboard
+   ./deploy.sh --host volumio@<host> install \
+       --key-action play 3,3 --key-action pause 4,2 --key-action stop 3,1 \
+       --key-action prev 2,3 --key-action next 1,4
+   ```
+
+6. **Reboot** so `alsa-restore`, the guard units and the pot daemon come up
    together, then play something and move the four pots.
 
 Verification any time:
@@ -194,6 +220,7 @@ Verification any time:
 ```sh
 ./software/volumio/dual-output/deploy.sh --host volumio@<host> verify --with-playback
 ./software/jukebox-pots/deploy.sh --host volumio@<host> verify
+./software/jukebox-keyboard/deploy.sh --host volumio@<host> verify
 ```
 
 If `sudo` on the box needs a password, add `-p <password>` or export
@@ -206,6 +233,7 @@ If `sudo` on the box needs a password, add `-p <password>` or export
 | `software/volumio/dual-output` | ALSA split + CamillaDSP tone step + guards + MPD buffers for Volumio |
 | `software/volumio/pot-overlay` | On-screen balance/bass/treble indicator (overlay server + injected UI loader) |
 | `software/jukebox-pots` | `jukebox-pots.service` (volume/balance/tone from the Arduino) |
+| `software/jukebox-keyboard` | `jukebox-keyboard.service` (play/pause/stop/prev/next from the key matrix) |
 | `software/volumio/ui-boost` | Volumio-only touch UI performance fixes |
 
 ## Safety notice

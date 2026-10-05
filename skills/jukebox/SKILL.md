@@ -52,6 +52,7 @@ credentials into files.
 | Volume control | `amixer -c sndrpirpidac sget SoftMaster` | readable 0–99 control |
 | Guard units | `systemctl is-enabled jukebox-audio-guard.service jukebox-audio-guard.path` | both `enabled` |
 | Pot service | `systemctl is-active jukebox-pots` | `active` (if installed) |
+| Keyboard service | `systemctl is-active jukebox-keyboard` | `active` (if installed) |
 | Pot port | `ls /dev/ttyACM*` | the PowerAndPots/Keyboard Arduino (if plugged) |
 | Tone engine | `systemctl is-active jukebox-pots` + `pgrep -x camilladsp` | service active; CamillaDSP runs only while playing |
 | Tone config | `ls /usr/local/jukebox-audio/cdsp/camilla.*.yml` | one template per variant (`0644`) |
@@ -207,6 +208,7 @@ states above.
 | Chain refuses to open | files hand-edited and guard reverted mid-play, or device busy | `mpc stop`; `apply`; `verify --with-playback` |
 | Overlay never shows | server down, nothing connected, or UI loader gone | `systemctl status jukebox-overlay`; `curl localhost:3210/state`; `sudo /usr/local/jukebox-overlay/apply.sh`; restart `volumio-kiosk` |
 | Overlay gone after a Volumio update | `index.html` rewritten | `systemctl start jukebox-overlay-guard.service` (re-injects), or re-run `apply.sh` |
+| A keyboard key does nothing | key not mapped, or wrong board | `journalctl -u jukebox-keyboard` (shows `unmapped key r,c`); identify with `jukebox-keyboard.py --watch`, then re-run install with `--key-action <action> r,c` |
 
 ## Repo map (for reference)
 
@@ -226,6 +228,13 @@ states above.
   by `apply.sh`, kept in place by `jukebox-overlay-guard.path`). The client reuses
   the UI's bundled jQuery-knob so it looks like the volume indicator. Install with
   `software/volumio/pot-overlay/deploy.sh install` (after jukebox-pots).
+- `software/jukebox-keyboard/` — `jukebox-keyboard.service`: reads the
+  KeyboardArduino's key events (`DOWN`/`UP`/`PRESS`/`LONG_PRESS`/`PRESSED`) and on
+  key **press** runs the mapped Volumio command (play/pause/stop/prev/next). Key
+  map in `/usr/local/jukebox-keyboard/config.env` (`JK_KEY_<action>=row,col`);
+  identify a key with `.../jukebox-keyboard.py --watch`. Selects the board by the
+  `Jukebox Keyboard` USB product string. Install with
+  `software/jukebox-keyboard/deploy.sh install`.
 - This skill lives in `skills/jukebox/`.
 
 When the user asks for jukebox work and anything looks different from this
