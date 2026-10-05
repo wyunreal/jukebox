@@ -60,6 +60,7 @@ ACTIONS = {
     "MUTE": _env("JK_KEY_MUTE", ""),
     "OPENCLOSE": _env("JK_KEY_OPENCLOSE", ""),
     "FAVOURITE": _env("JK_KEY_FAVOURITE", ""),
+    "CLEAR": _env("JK_KEY_CLEAR", ""),
 }
 # Volumio command per action. MUTE is handled separately (it reads the current
 # state and toggles), so it is not listed here.
@@ -69,9 +70,10 @@ CMD = {
     "STOP": "stop",
     "PREV": "prev",
     "NEXT": "next",
+    "CLEAR": "clearQueue",
 }
 # Order used for lookup and for the probe listing.
-ACTION_ORDER = ("PLAY", "PAUSE", "STOP", "PREV", "NEXT", "MUTE", "OPENCLOSE", "FAVOURITE")
+ACTION_ORDER = ("PLAY", "PAUSE", "STOP", "PREV", "NEXT", "MUTE", "OPENCLOSE", "FAVOURITE", "CLEAR")
 
 # "DOWN r c" is the press event; we act on it so keys feel immediate.
 PRESS_RE = re.compile(r"^DOWN\s+(\d+)\s+(\d+)\s*$")

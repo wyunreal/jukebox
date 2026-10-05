@@ -35,6 +35,7 @@ The key -> action map lives in `/usr/local/jukebox-keyboard/config.env`
 | `PLAY` | `cmd=play` |
 | `PAUSE` | `cmd=pause` |
 | `STOP` | `cmd=stop` |
+| `CLEAR` | `cmd=clearQueue` (empties the play queue) |
 | `PREV` | `cmd=prev` |
 | `NEXT` | `cmd=next` |
 | `MUTE` | toggles mute (reads the current state, then mute/unmute) |
