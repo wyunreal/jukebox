@@ -67,7 +67,7 @@
 #
 set -euo pipefail
 
-VERSION="1.2.2"
+VERSION="1.2.4"
 
 APPLY_DIR="/usr/local/jukebox-audio"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -1364,11 +1364,16 @@ PY
 }
 
 mpd_playback_test() {
+  # Returns: 0 = passed, 1 = failed, 2 = skipped (nothing to play).
   local was_playing=0 dn jn hn un r=0 cur="" restored=0 v added=0 track
   v="$(live_variant)"
   mpc status 2>/dev/null | grep -q '\[playing\]' && was_playing=1
 
   if [ "$was_playing" = 0 ]; then
+    # Right after boot MPD is slow to start: its database may not be loaded
+    # yet and the first output can take a while to open. Give it 20 s so the
+    # test does not fail for a reason that is not the audio chain.
+    sleep 20
     # The queue is often empty (e.g. right after a reboot) and then `mpc play`
     # does nothing and the test would fail for no good reason. Pull a track
     # from the library so there is something to play, and remember to clean it
@@ -1377,7 +1382,7 @@ mpd_playback_test() {
       track="$(mpc listall 2>/dev/null | head -1)"
       if [ -z "$track" ]; then
         warn "no track in the MPD queue or library; skipping MPD playback test"
-        return 0
+        return 2
       fi
       if mpc add "$track" >/dev/null 2>&1; then
         added=1
@@ -1387,7 +1392,7 @@ mpd_playback_test() {
     if ! mpc play >/dev/null 2>&1; then
       warn "could not start MPD playback; skipping MPD playback test"
       [ "$added" = 1 ] && mpc clear >/dev/null 2>&1 || true
-      return 0
+      return 2
     fi
     sleep 4
   fi
@@ -1746,11 +1751,13 @@ PY
   fi
 
   if [ "$PLAY_TEST" = 1 ]; then
-    if mpd_playback_test; then
-      ok "MPD playback runs through the chain"
-    else
-      fail "MPD playback test failed"; rc=$((rc + 1))
-    fi
+    local prc=0
+    mpd_playback_test || prc=$?
+    case "$prc" in
+      0) ok "MPD playback runs through the chain" ;;
+      2) warn "MPD playback test skipped (nothing to play)" ;;
+      *) fail "MPD playback test failed"; rc=$((rc + 1)) ;;
+    esac
   fi
 
   if [ "$rc" = 0 ]; then

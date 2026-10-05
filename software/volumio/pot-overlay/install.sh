@@ -22,7 +22,7 @@
 #
 set -euo pipefail
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 
 DEST="/usr/local/jukebox-overlay"
 CONFIG_ENV="$DEST/config.env"
