@@ -19,7 +19,10 @@
 #
 # Options:
 #   --dac-card NAME        ALSA card id of the DAC (default: auto-detect)
-#   --port DEV             serial device (default: auto-detect the Arduino)
+#   --port DEV             serial device (default: auto-detect by USB product)
+#   --product STR          USB product string of the PowerAndPots board
+#                          (default: "Jukebox Pots"; must match the string
+#                          compiled into the firmware via -DUSB_PRODUCT)
 #   --baud N               serial baud rate (default: 9600)
 #   --volume-max N         Volumio volume scale (default: 100)
 #   --pot-max N            firmware pot range (default: 20)
@@ -42,7 +45,7 @@
 #
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 APPLY_DIR="/usr/local/jukebox-pots"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -51,6 +54,7 @@ UDEV_RULE="/etc/udev/rules.d/89-jukebox-pots.rules"
 
 DAC_CARD=""
 PORT=""
+PRODUCT="Jukebox Pots"
 BAUD="9600"
 VOLUME_MAX="100"
 POT_MAX="20"
@@ -113,6 +117,7 @@ write_config() {
 # jukebox-pots settings (edited by install.sh; read by the service)
 JP_DAC_CARD=$DAC_CARD
 JP_PORT=$PORT
+JP_PRODUCT=$PRODUCT
 JP_BAUD=$BAUD
 JP_VOLUME_MAX=$VOLUME_MAX
 JP_POT_MAX=$POT_MAX
@@ -184,7 +189,8 @@ cmd_install() {
 
   say "Installing jukebox-pots (v$VERSION)"
   echo "    DAC card     : $DAC_CARD"
-  echo "    serial port  : ${PORT:-<auto-detect>}"
+  echo "    serial port  : ${PORT:-auto-detect by USB product}"
+  echo "    USB product  : $PRODUCT"
   echo "    volume       : pot 0..$POT_MAX -> 0..$VOLUME_MAX$([ "$VOLUME_INVERT" = 1 ] && echo ' (inverted)')"
   echo "    balance      : pot center $BALANCE_CENTER, span $BALANCE_SPAN$([ "$BALANCE_INVERT" = 1 ] && echo ' (inverted)')"
   local platform backend_desc
@@ -254,7 +260,7 @@ cmd_verify() {
     fail "service is not running"; rc=$((rc + 1))
   fi
 
-  port="$(JP_DAC_CARD="$DAC_CARD" JP_PORT="$PORT" python3 "$APPLY_DIR/jukebox-pots.py" --probe 2>/dev/null | sed -n 's/^serial port   : //p')"
+  port="$(JP_DAC_CARD="$DAC_CARD" JP_PORT="$PORT" JP_PRODUCT="$PRODUCT" python3 "$APPLY_DIR/jukebox-pots.py" --probe 2>/dev/null | sed -n 's/^serial port   : //p')"
   case "$port" in
     ""|"<not found>")
       warn "Arduino serial port not detected right now (plug it in; the service will pick it up)"
@@ -295,7 +301,7 @@ cmd_status() {
   echo "installed    : $([ -d "$APPLY_DIR" ] && echo "yes ($APPLY_DIR)" || echo no)"
   echo "service      : $(systemctl is-enabled jukebox-pots.service 2>/dev/null || echo -) / $(systemctl is-active jukebox-pots.service 2>/dev/null || echo -)"
   if [ -x "$APPLY_DIR/jukebox-pots.py" ]; then
-    JP_DAC_CARD="$DAC_CARD" JP_PORT="${JP_PORT:-}" python3 "$APPLY_DIR/jukebox-pots.py" --probe 2>/dev/null || true
+    JP_DAC_CARD="$DAC_CARD" JP_PORT="${JP_PORT:-}" JP_PRODUCT="${JP_PRODUCT:-Jukebox Pots}" python3 "$APPLY_DIR/jukebox-pots.py" --probe 2>/dev/null || true
   fi
   if amixer -c "$DAC_CARD" sget SoftMaster >/dev/null 2>&1; then
     amixer -c "$DAC_CARD" sget SoftMaster | grep -E "Front (Left|Right)"
@@ -321,6 +327,8 @@ main() {
       --dac-card=*) DAC_CARD="${1#*=}"; shift ;;
       --port) PORT="$2"; shift 2 ;;
       --port=*) PORT="${1#*=}"; shift ;;
+      --product) PRODUCT="$2"; shift 2 ;;
+      --product=*) PRODUCT="${1#*=}"; shift ;;
       --baud) BAUD="$2"; shift 2 ;;
       --volume-max) VOLUME_MAX="$2"; shift 2 ;;
       --pot-max) POT_MAX="$2"; shift 2 ;;

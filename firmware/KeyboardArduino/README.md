@@ -42,6 +42,14 @@ PRESS 1 2
 Debounce is `DEBOUNCE_MS` (20 ms); all constants live at the top of
 `src/main.cpp`.
 
+## USB identification
+
+This board is an Arduino Micro identical to the PowerAndPots one (same VID:PID,
+no unique USB serial). `platformio.ini` sets
+`board_build.usb_product = Jukebox Keyboard`, so it enumerates with the product
+string **"Jukebox Keyboard"** (`/dev/serial/by-id/usb-Jukebox_Keyboard_*-if00`),
+which lets the host address it independently of the USB port.
+
 ## Build and flash
 
 [PlatformIO](https://platformio.org/) project:

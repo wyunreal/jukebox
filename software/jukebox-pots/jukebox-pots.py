@@ -23,6 +23,12 @@ does not carry the SoftMaster control at all.
 It has no third-party dependencies (no pyserial): the serial port is opened and
 configured directly through termios.  The port is re-scanned when it is missing,
 so the service survives the Arduino being unplugged and replugged.
+
+Which board is which is decided by the USB product string baked into each
+board's firmware (the keyboard Micro reports "Jukebox Keyboard", the
+PowerAndPots one "Jukebox Pots"), never by the USB port.  The two Micros share
+a VID:PID and carry no unique USB serial, so a port number or a by-path link
+would break whenever a cable or hub moved; the product string does not.
 """
 
 from __future__ import annotations
@@ -60,6 +66,13 @@ DAC_CARD = _env("JP_DAC_CARD", "")
 EXPLICIT_PORT = _env("JP_PORT", "")
 BAUD = _env_int("JP_BAUD", 9600)
 
+# Board selection is by USB product string, written per board in the firmware
+# (see platformio.ini, -DUSB_PRODUCT).  The two Micros share a VID:PID and have
+# no unique USB serial, so this string is the only thing that makes each board
+# addressable without tying it to a physical USB port.  It shows up both in
+# /dev/serial/by-id and in the sysfs "product" attribute.
+PRODUCT_MATCH = _env("JP_PRODUCT", "Jukebox Pots")
+
 VOLUMIO = _env("JP_VOLUMIO", "localhost:3000")
 USE_API = _env_bool("JP_USE_API", True)
 
@@ -88,16 +101,6 @@ TONE_ACTIVE = _env("JP_TONE_ACTIVE", "/var/lib/jukebox-audio/camilla-active.%s.y
 TONE_VARIANTS = ("usb", "hdmi", "jack", "daconly")
 # CamillaDSP is (re)started by the cdsp plugin; we locate it to reload it.
 CAMILLA_PROC = _env("JP_CAMILLA_PROC", "camilladsp")
-
-# Arduino Micro (official + Arduino LLC/SA USB ids) and clones that identify
-# themselves by product string.  Used only to pick the right ttyACM/ttyUSB.
-ARDUINO_VID_PID = {
-    ("2341", "8036"), ("2341", "8037"),
-    ("2a03", "0042"), ("2a03", "0043"),
-}
-# Product strings contain "Arduino" (e.g. "Arduino Micro"); keep the fallback
-# narrow so an unrelated serial device is never picked by mistake.
-ARDUINO_HINTS = ("arduino",)
 
 VOLUMIO_RE = re.compile(r"^POT volume:\s*(-?\d+)")
 BALANCE_RE = re.compile(r"^POT balance:\s*(-?\d+)")
@@ -162,55 +165,28 @@ def map_tone(pot: int, center: int = TONE_POT_CENTER, span: int = TONE_POT_SPAN,
 # -------------------------------------------------------------------- serial
 
 
-def _sysfs_usb_ids(tty: str) -> tuple[str, str, str]:
-    """Resolve (idVendor, idProduct, product) for a /dev/ttyXXX, or empty."""
-    dev = "/sys/class/tty/%s/device" % os.path.basename(tty)
-    path = os.path.realpath(dev) if os.path.exists(dev) else ""
-    node = path
+def _usb_product(tty: str) -> str:
+    """Read a /dev/ttyXXX's USB product string from sysfs, or "" if unknown.
+
+    This is the string the board reports at enumeration (see the firmware's
+    -DUSB_PRODUCT), not a USB VID/PID and not a port name.
+    """
+    node = os.path.realpath("/sys/class/tty/%s/device" % os.path.basename(tty))
     for _ in range(6):
         if not node or node == "/":
             break
-        vid = os.path.join(node, "idVendor")
-        pid = os.path.join(node, "idProduct")
-        if os.path.exists(vid) and os.path.exists(pid):
+        path = os.path.join(node, "product")
+        if os.path.exists(path):
             try:
-                product = open(os.path.join(node, "product")).read().strip()
+                return open(path).read().strip()
             except OSError:
-                product = ""
-            return (open(vid).read().strip(), open(pid).read().strip(), product)
+                return ""
         node = os.path.dirname(node)
-    return ("", "", "")
+    return ""
 
 
-def _looks_like_arduino(tty: str) -> bool:
-    vid, pid, product = _sysfs_usb_ids(tty)
-    if (vid, pid) in ARDUINO_VID_PID:
-        return True
-    blob = (product + " " + os.path.basename(tty)).lower()
-    return any(h in blob for h in ARDUINO_HINTS)
-
-
-def find_port() -> str | None:
-    """Return the serial device for the PowerAndPots Arduino, or None.
-
-    Preference: explicit JP_PORT, then /dev/serial/by-id (stable names), then
-    the first ttyACM/ttyUSB whose USB ids look like an Arduino.
-    """
-    if EXPLICIT_PORT:
-        return EXPLICIT_PORT if os.path.exists(EXPLICIT_PORT) else None
-
-    for link in sorted(glob.glob("/dev/serial/by-id/*")):
-        name = os.path.basename(link).lower()
-        if any(h in name for h in ARDUINO_HINTS):
-            real = os.path.realpath(link)
-            if os.path.exists(real):
-                return real
-
-    for pattern in ("/dev/ttyACM*", "/dev/ttyUSB*"):
-        for tty in sorted(glob.glob(pattern)):
-            if _looks_like_arduino(tty):
-                return tty
-    return None
+def _product_matches(product: str) -> bool:
+    return product.strip().lower() == PRODUCT_MATCH.strip().lower()
 
 
 def request_status(fd: int) -> None:
@@ -271,6 +247,32 @@ def read_lines(fd: int, timeout: float = 0.2) -> tuple[list[str], bool]:
             line, buf = buf.split(b"\n", 1)
             lines.append(line.decode("ascii", "ignore").strip())
     return lines, True
+
+
+def find_port() -> str | None:
+    """Return the serial device of the PowerAndPots Arduino, or None.
+
+    Selection is by the USB product string the board's firmware reports
+    (PRODUCT_MATCH), not by a port number or a USB VID/PID.  Preference:
+    an explicit JP_PORT override, then /dev/serial/by-id links whose name
+    matches, then any ttyACM/ttyUSB whose sysfs product matches.
+    """
+    if EXPLICIT_PORT:
+        return EXPLICIT_PORT if os.path.exists(EXPLICIT_PORT) else None
+
+    want = PRODUCT_MATCH.strip().lower().replace(" ", "_")
+    for link in sorted(glob.glob("/dev/serial/by-id/*")):
+        name = os.path.basename(link).lower()
+        if want in name:
+            real = os.path.realpath(link)
+            if os.path.exists(real):
+                return real
+
+    for pattern in ("/dev/ttyACM*", "/dev/ttyUSB*"):
+        for tty in sorted(glob.glob(pattern)):
+            if _product_matches(_usb_product(tty)):
+                return tty
+    return None
 
 
 # ---------------------------------------------------------------------- ALSA
@@ -530,12 +532,13 @@ def probe() -> int:
     port = find_port()
     print("dac card      : %s" % (DAC_CARD or "<not set>"))
     if port:
-        vid, pid, product = _sysfs_usb_ids(port)
         print("serial port   : %s" % port)
-        print("usb id        : %s:%s %s" % (vid or "?", pid or "?", product))
+        print("usb product   : %s" % (_usb_product(port) or "?"))
     else:
         print("serial port   : <not found>")
-        print("                (no /dev/ttyACM* or ttyUSB* looks like an Arduino)")
+        print("                (no serial device reports product %r)" % PRODUCT_MATCH)
+    for path in sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*")):
+        print("candidate     : %s -> %s" % (path, _usb_product(path) or "<unknown product>"))
     print("SoftMaster    : %s" % (read_softmaster(),))
     if port:
         try:

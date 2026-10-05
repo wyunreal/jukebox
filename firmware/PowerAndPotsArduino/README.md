@@ -47,6 +47,16 @@ Potentiometers are scaled through per-segment calibration tables
 to a value, interpolating between points. Adjust them there to calibrate
 your hardware.
 
+## USB identification
+
+The jukebox also carries a KeyboardArduino; both are identical Arduino Micros
+(same VID:PID, no unique USB serial). To let the host tell them apart without
+depending on which USB port each is plugged into, this firmware sets
+`board_build.usb_product = Jukebox Pots` in `platformio.ini`, so the board
+enumerates with the product string **"Jukebox Pots"** (and appears as
+`/dev/serial/by-id/usb-Jukebox_Pots_*-if00`). The keyboard board sets its own
+string. `jukebox-pots` selects the port by this string.
+
 ## Pin map
 
 | Pin | Function | Notes |

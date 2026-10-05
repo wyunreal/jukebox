@@ -104,8 +104,8 @@ and restarts the service. It will:
 sudo ./install.sh uninstall
 ```
 
-* `status` shows the detected port, its USB id and the current `SoftMaster`
-  Left/Right values.
+* `status` shows the detected port, its USB product string and the current
+  `SoftMaster` Left/Right values.
 * `verify` checks the daemon, the self-tests, the unit state, the serial port
   and the `SoftMaster` control.
 * The daemon can be probed on its own:
@@ -117,15 +117,24 @@ sudo ./install.sh uninstall
 
 ## Identify the Arduino
 
-With only the PowerAndPots board plugged in, the port should be
-`/dev/ttyACM0` and its USB id `2341:8037` (Arduino Micro). The daemon looks for
-it in this order:
+The jukebox has **two identical Arduino Micros** (the PowerAndPots one and the
+keyboard one). They share the USB VID:PID `2341:8037` and carry **no unique USB
+serial number**, so the kernel cannot tell them apart by id — and binding the
+daemon to a port number or a `by-path` link would break as soon as a cable or
+hub moved. Instead each board is flashed with its own **USB product string**:
+
+| Board | `board_build.usb_product` | `/dev/serial/by-id` link |
+| --- | --- | --- |
+| PowerAndPots | `Jukebox Pots` | `usb-Jukebox_Pots_*-if00` |
+| Keyboard | `Jukebox Keyboard` | `usb-Jukebox_Keyboard_*-if00` |
+
+The daemon selects the board whose product string is `Jukebox Pots`
+(`--product` / `JP_PRODUCT` to change it, must match the firmware). Lookup
+order:
 
 1. `--port DEV` / `JP_PORT` if you set one explicitly;
-2. a `/dev/serial/by-id/*` symlink whose name contains `arduino`;
-3. the first `/dev/ttyACM*` or `/dev/ttyUSB*` whose USB ids are `2341:8036`,
-   `2341:8037`, `2a03:0042`, `2a03:0043`, or whose product string mentions
-   Arduino.
+2. a `/dev/serial/by-id/*` symlink whose name matches the product string;
+3. any `/dev/ttyACM*` / `/dev/ttyUSB*` whose sysfs `product` matches.
 
 > If `lsusb` does not show the board at all, it is usually a **charge-only USB
 > cable** or a port without data lines. Try another cable before anything else.
@@ -173,7 +182,8 @@ is running. The firmware streams regardless of DTR, so plain `termios` suffices.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--dac-card NAME` | auto | ALSA card id of the DAC |
-| `--port DEV` | auto | serial device |
+| `--port DEV` | auto | serial device (overrides product matching) |
+| `--product STR` | `Jukebox Pots` | USB product string of the PowerAndPots board |
 | `--baud N` | 9600 | serial baud rate |
 | `--pot-max N` | 20 | firmware pot range |
 | `--volume-max N` | 100 | player volume scale |
