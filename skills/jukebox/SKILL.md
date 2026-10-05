@@ -107,6 +107,8 @@ The touch UI was sluggish/scrolling badly because Chromium was forced into
 software compositing, the `now_playing` UI used very heavy CSS blurs, and a
 phantom HDMI output forced the X screen to 848px over an 800px panel. Fixed by
 `software/volumio/ui-boost/` (canonical copies in `/usr/local/jukebox-ui/`).
+Install/deploy with `software/volumio/ui-boost/deploy.sh install` (or its
+`install.sh` on the host); a reboot makes it take effect.
 
 ```sh
 sudo /usr/local/jukebox-ui/jukebox-ui.sh status   # overview + X screen

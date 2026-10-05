@@ -202,15 +202,15 @@ The order matters: **player first, then the audio chain, then the pots.**
    ```
 
 4. *(Optional)* Speed up the touch UI (GPU compositing, no blur, correct DSI
-   resolution). This one runs on the Pi itself:
+   resolution):
 
    ```sh
    cd software/volumio/ui-boost
-   scp install.sh jukebox-ui.sh jukebox-ui-guard.service jukebox-ui-guard.path \
-       volumio@<host>:/tmp/
-   ssh volumio@<host> 'cd /tmp && sudo bash install.sh'
-   ssh volumio@<host> 'sudo reboot'
+   ./deploy.sh --host volumio@<host> install
+   ./deploy.sh --host volumio@<host> status
    ```
+
+   It takes full effect after a reboot (`ssh volumio@<host> 'sudo reboot'`).
 
 5. *(Optional)* Wire the keyboard's playback keys. Identify each key with
    `--watch` (press it and note the `row,col`) and assign the actions:
@@ -231,6 +231,7 @@ Verification any time:
 ./software/volumio/dual-output/deploy.sh --host volumio@<host> verify --with-playback
 ./software/jukebox-pots/deploy.sh --host volumio@<host> verify
 ./software/jukebox-keyboard/deploy.sh --host volumio@<host> verify
+./software/volumio/ui-boost/deploy.sh --host volumio@<host> verify
 ```
 
 If `sudo` on the box needs a password, add `-p <password>` or export
@@ -244,7 +245,7 @@ If `sudo` on the box needs a password, add `-p <password>` or export
 | `software/volumio/pot-overlay` | On-screen balance/bass/treble indicator (overlay server + injected UI loader) |
 | `software/volumio/ui-nav` | UI navigation channel (a daemon can switch the screen; used by the open/close key) |
 | `software/jukebox-pots` | `jukebox-pots.service` (volume/balance/tone from the Arduino) |
-| `software/jukebox-keyboard` | `jukebox-keyboard.service` (play/pause/stop/prev/next/mute, and open/close the queue view) |
+| `software/jukebox-keyboard` | `jukebox-keyboard.service` (play/pause/stop/prev/next/mute/clear/save-queue, favourite, open/close the queue view) |
 | `software/volumio/ui-boost` | Volumio-only touch UI performance fixes |
 
 ## Safety notice
