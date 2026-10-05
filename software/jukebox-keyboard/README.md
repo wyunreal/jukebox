@@ -21,6 +21,10 @@ jukebox-keyboard.service
 README.md
 ```
 
+Favourite and the open/close screen toggle are not Volumio commands: the daemon
+asks the UI to do them (via `software/volumio/ui-nav`), so the UI updates itself
+(heart, toast, routing). Everything else runs the Volumio API directly.
+
 ## Configuration
 
 The key -> action map lives in `/usr/local/jukebox-keyboard/config.env`
@@ -35,6 +39,13 @@ The key -> action map lives in `/usr/local/jukebox-keyboard/config.env`
 | `NEXT` | `cmd=next` |
 | `MUTE` | toggles mute (reads the current state, then mute/unmute) |
 | `OPENCLOSE` | toggles the UI between the now-playing home and the play queue |
+| `FAVOURITE` | toggles the current track/station in favourites (music uses Volumio's own path; radios are handled by `ui-nav`, see below) |
+
+`FAVOURITE` runs through the UI (`software/volumio/ui-nav`), so the heart and
+the toast update. For **webradio** this is not just cosmetic: Volumio's backend
+has a gap (its `checkFavourites` only looks at the music favourites list), so
+its own heart never lights for a radio and its add never toggles. `ui-nav` fills
+that in for radios only.
 
 `OPENCLOSE` is not a Volumio command: it asks the UI to switch view, so it needs
 `software/volumio/ui-nav` installed (its server is the daemon → UI channel, and

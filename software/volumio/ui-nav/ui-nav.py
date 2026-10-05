@@ -26,6 +26,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HOST = os.environ.get("JK_NAV_HOST", "0.0.0.0")
 PORT = int(os.environ.get("JK_NAV_PORT", "3211"))
 ROOT = os.environ.get("JK_NAV_ROOT", "/usr/local/jukebox-ui-nav")
+# Volumio's favourites files (read-only, for the /favourite query).
+FAV_DIR = os.environ.get("JK_NAV_FAV_DIR", "/data/favourites")
 
 _lock = threading.Lock()
 _clients: "set[queue.Queue]" = set()
@@ -81,6 +83,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, body, "application/javascript")
             return
+        if path == "/favourite":
+            self._favourite()
+            return
         if path == "/state":
             self._send(200, json.dumps(_last).encode(), "application/json")
             return
@@ -88,6 +93,29 @@ class Handler(BaseHTTPRequestHandler):
             self._stream()
             return
         self._send(200, b"jukebox-ui-nav ok\n", "text/plain")
+
+    def _favourite(self) -> None:
+        """Whether a track/station is in Volumio's favourites.
+
+        Volumio does not expose this over REST (and for webradio it does not
+        report it over socket either), so the client asks us and we read the
+        file Volumio keeps. Query: ?service=webradio&uri=...
+        """
+        from urllib.parse import urlparse, parse_qs
+        q = parse_qs(urlparse(self.path).query)
+        service = (q.get("service") or ["mpd"])[0]
+        uri = (q.get("uri") or [""])[0]
+        name = "radio-favourites" if service == "webradio" else "favourites"
+        fav = False
+        try:
+            with open(os.path.join(FAV_DIR, name), encoding="utf-8") as fh:
+                for e in json.load(fh):
+                    if isinstance(e, dict) and e.get("uri") == uri:
+                        fav = True
+                        break
+        except (OSError, ValueError):
+            pass
+        self._send(200, json.dumps({"favourite": fav}).encode(), "application/json")
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path.split("?", 1)[0] != "/update":

@@ -59,6 +59,7 @@ ACTIONS = {
     "NEXT": _env("JK_KEY_NEXT", ""),
     "MUTE": _env("JK_KEY_MUTE", ""),
     "OPENCLOSE": _env("JK_KEY_OPENCLOSE", ""),
+    "FAVOURITE": _env("JK_KEY_FAVOURITE", ""),
 }
 # Volumio command per action. MUTE is handled separately (it reads the current
 # state and toggles), so it is not listed here.
@@ -70,7 +71,7 @@ CMD = {
     "NEXT": "next",
 }
 # Order used for lookup and for the probe listing.
-ACTION_ORDER = ("PLAY", "PAUSE", "STOP", "PREV", "NEXT", "MUTE", "OPENCLOSE")
+ACTION_ORDER = ("PLAY", "PAUSE", "STOP", "PREV", "NEXT", "MUTE", "OPENCLOSE", "FAVOURITE")
 
 # "DOWN r c" is the press event; we act on it so keys feel immediate.
 PRESS_RE = re.compile(r"^DOWN\s+(\d+)\s+(\d+)\s*$")
@@ -125,7 +126,7 @@ def is_muted() -> bool | None:
 
 
 def _post_nav(payload: dict) -> None:
-    """Best-effort POST to the ui-nav server (daemon -> UI navigation)."""
+    """Best-effort POST to the ui-nav server (daemon -> UI navigation/actions)."""
     data = json.dumps(payload).encode()
     try:
         req = urllib.request.Request(NAV_URL, data=data,
@@ -149,6 +150,12 @@ def run_action(action: str) -> None:
     if action == "OPENCLOSE":
         _post_nav({"type": "nav", "view": "toggle"})
         log("OPENCLOSE -> toggle view")
+        return
+    if action == "FAVOURITE":
+        # Ask the UI to toggle the favourite, so the heart and the toast update
+        # (a socket emit from here would not reach the UI's own connection).
+        _post_nav({"type": "ui", "action": "favourite"})
+        log("FAVOURITE -> toggle (via UI)")
         return
     cmd = CMD.get(action)
     if not cmd:

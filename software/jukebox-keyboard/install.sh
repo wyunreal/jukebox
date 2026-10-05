@@ -17,7 +17,7 @@
 #
 # Options:
 #   --key-action ROW,COL    assign a key to an action; repeatable. Actions:
-#                           play|pause|stop|prev|next|mute|openclose
+#                           play|pause|stop|prev|next|mute|openclose|favourite
 #   --port DEV              serial device (default: auto-detect by product)
 #   --product STR           USB product string of the keyboard board
 #                           (default: "Jukebox Keyboard")
@@ -27,7 +27,7 @@
 #
 set -euo pipefail
 
-VERSION="1.2.0"
+VERSION="1.4.0"
 
 APPLY_DIR="/usr/local/jukebox-keyboard"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -47,6 +47,7 @@ KEY_PREV=""
 KEY_NEXT=""
 KEY_MUTE=""
 KEY_OPENCLOSE=""
+KEY_FAVOURITE=""
 
 say()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ok()   { printf '    \033[1;32mok\033[0m   %s\n' "$*"; }
@@ -75,6 +76,7 @@ load_existing_config() {
   KEY_NEXT="${JK_KEY_NEXT:-$KEY_NEXT}"
   KEY_MUTE="${JK_KEY_MUTE:-$KEY_MUTE}"
   KEY_OPENCLOSE="${JK_KEY_OPENCLOSE:-$KEY_OPENCLOSE}"
+  KEY_FAVOURITE="${JK_KEY_FAVOURITE:-$KEY_FAVOURITE}"
 }
 
 write_config() {
@@ -92,6 +94,7 @@ JK_KEY_PREV=$KEY_PREV
 JK_KEY_NEXT=$KEY_NEXT
 JK_KEY_MUTE=$KEY_MUTE
 JK_KEY_OPENCLOSE=$KEY_OPENCLOSE
+JK_KEY_FAVOURITE=$KEY_FAVOURITE
 EOF
 }
 
@@ -141,6 +144,7 @@ keys_to_assign() {
   [ -n "$KEY_NEXT" ] && echo "next=$KEY_NEXT"
   [ -n "$KEY_MUTE" ] && echo "mute=$KEY_MUTE"
   [ -n "$KEY_OPENCLOSE" ] && echo "openclose=$KEY_OPENCLOSE"
+  [ -n "$KEY_FAVOURITE" ] && echo "favourite=$KEY_FAVOURITE"
   true
 }
 
@@ -243,7 +247,8 @@ set_key() {
     next)  KEY_NEXT="$2" ;;
     mute)  KEY_MUTE="$2" ;;
     openclose|open/close)  KEY_OPENCLOSE="$2" ;;
-    *) die "unknown action for --key-action: $1 (use play|pause|stop|prev|next|mute|openclose)" ;;
+    favourite|favorite)  KEY_FAVOURITE="$2" ;;
+    *) die "unknown action for --key-action: $1 (use play|pause|stop|prev|next|mute|openclose|favourite)" ;;
   esac
 }
 

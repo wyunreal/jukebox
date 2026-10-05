@@ -16,7 +16,7 @@
 #
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.2.3"
 
 DEST="/usr/local/jukebox-ui-nav"
 CONFIG_ENV="$DEST/config.env"
