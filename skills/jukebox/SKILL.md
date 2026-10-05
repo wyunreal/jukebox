@@ -28,16 +28,10 @@ is disabled (`mixer_type "none"`) — `mpc volume` answering "No mixer" is
 
 ```sh
 ssh volumio@<host>          # Volumio box: login user is `volumio`
-ssh moode@<host>            # moOde box: login user is `moode`
 ```
 
-The live daily-driver box is the **Volumio** one; the **moOde** box is the
-port on the second SD (`software/moode/dual-output/`). Ask the user which one
-to work on.
-
 `<host>` is whatever mDNS name or IP the user set up (Volumio's default
-hostname is `volumio`; the moOde box was named `jukebox`). If the name doesn't
-resolve, ask the user or discover it:
+hostname is `volumio`). If the name doesn't resolve, ask the user or discover it:
 
 ```sh
 avahi-browse -rt _ssh._tcp        # find SSH-advertising hosts on the LAN
@@ -49,8 +43,6 @@ user's password — ask for it, or have them run
 credentials into files.
 
 ## Expected state after login (checklist)
-
-**Volumio box:**
 
 | Check | Command | Expected |
 |---|---|---|
@@ -67,21 +59,9 @@ credentials into files.
 | UI boost | `sudo /usr/local/jukebox-ui/jukebox-ui.sh verify` | all `ok`, X screen `800x480` |
 | UI guard | `systemctl is-active jukebox-ui-guard.path` | `active` |
 
-**moOde box:**
-
-| Check | Command | Expected |
-|---|---|---|
-| Services | `systemctl is-active mpd jukebox-pots jukebox-moode-guard.path` | all `active` |
-| I2S DAC | `cat /proc/asound/cards` | `sndrpirpidac` present (overlay `i2s-dac`) |
-| Split | `grep slave.pcm /etc/alsa/conf.d/_audioout.conf` | `"jukeboxSplit"` |
-| Tone state | `readlink -f /usr/share/camilladsp/working_config.yml` | `.../configs/jukebox-tone.yml` |
-| Volume type | `grep mixer_type /etc/mpd.conf \| head -1` | `null` (CamillaDSP fader) |
-| Tool | `sudo /usr/local/jukebox-moode/jukebox-moode.sh status` | split + tone + guard active |
-| Pot service | `systemctl is-active jukebox-pots` + `journalctl -u jukebox-pots \| tail` | `active`; says `platform moode` |
-
 If the USB card is unplugged, the chain automatically falls back to DAC-only
-(speakers keep playing) on both platforms; plug it back and the guard/udev
-re-activates the split within seconds. That is by design.
+(speakers keep playing); plug it back and the guard/udev re-activates the split
+within seconds. That is by design.
 
 ## The jukebox-audio tool
 
@@ -116,37 +96,6 @@ it as `analyser trim :`.
   while experimenting).
 - From a dev machine: `software/volumio/dual-output/deploy.sh install
   --second-output usb` copies the installer over SSH and runs it remotely.
-
-## The jukebox-moode tool
-
-Canonical files + helper live in `/usr/local/jukebox-moode/`; the same script
-is in this repo at `software/moode/dual-output/` (design docs in its README,
-full plan in `docs/moode-port-plan.md`).
-
-```sh
-sudo /usr/local/jukebox-moode/jukebox-moode.sh status     # quick overview
-sudo /usr/local/jukebox-moode/jukebox-moode.sh verify     # full checks
-sudo /usr/local/jukebox-moode/jukebox-moode.sh apply      # re-assert (guard runs this)
-sudo /usr/local/jukebox-moode/jukebox-moode.sh install --second-output usb|none
-sudo /usr/local/jukebox-moode/jukebox-moode.sh uninstall  # restore moOde files
-```
-
-Differences from Volumio worth remembering:
-
-* The split lives in `/etc/alsa/conf.d/90-jukebox-split.conf` and `_audioout.conf`
-  is pointed at `pcm.jukeboxSplit`; moOde rewrites `_audioout.conf` on output
-  changes, so `jukebox-moode-guard.path` watches it and re-asserts.
-* Tone+balance live in **one** CamillaDSP config,
-  `/usr/share/camilladsp/configs/jukebox-tone.yml`, selected through moOde's
-  `working_config.yml` symlink. `jukebox-pots` rewrites its gains and sends
-  `SIGHUP`.
-* Volume type must be **CamillaDSP** (moOde UI: Audio Config → Volume type).
-  It turns the knob into the CamillaDSP fader; only the DAC branch passes
-  through it, so the analyser feed stays at a fixed level.
-* The first playback after `pkill camilladsp` (or a reboot) is slower: the
-  `cdsp` plugin starts CamillaDSP per open. That is normal.
-* The DAC overlay on this Pi is `i2s-dac` (PCM1794A), not a HiFiBerry one;
-  moOde Audio Config lists it as **"Generic-I2S (i2s-dac)"**.
 
 ## The jukebox-ui tool (touch screen speed)
 
@@ -252,10 +201,6 @@ states above.
 | Tone pots do nothing | tone off (`JB_TONE`), no CamillaDSP config, or the daemon can't write it | check `ls /usr/local/jukebox-audio/cdsp/`; `journalctl -u jukebox-pots \| grep tone`; reinstall `jukebox-audio` with tone on |
 | No sound after installing the tone | CamillaDSP `chunksize` too large for the cdsp pipe (deadlock, XRUN) | keep `chunksize: 512` in the tone template; `apply`; reinstall |
 | Music plays a while, then Volumio says "failed to open output device" | player underrun escalated to a fatal XRUN (old plugin, or buffer too small) | update the plugin + `apply` (3 s buffer, silence concealment); check `mpd.log` for `XRUN`/`Broken pipe` |
-| moOde: DAC missing in Audio Config despite selecting it | wrong overlay (e.g. HiFiBerry PCM5122) for this PCM1794A board | `dtoverlay=i2s-dac` in `/boot/firmware/config.txt`, select "Generic-I2S (i2s-dac)", reboot |
-| moOde: split/tone reverted after touching Audio Config | moOde rewrote `_audioout.conf` / the CamillaDSP selection | `sudo /usr/local/jukebox-moode/jukebox-moode.sh apply`; check the guard is active |
-| moOde: volume doesn't reach the speakers | Volume type is not CamillaDSP | Audio Config → Volume type → CamillaDSP, or `cdsp` isn't selected as working config |
-| moOde: DAC plays but the USB analyser gets no signal | split missing the `route` stage, or the card mixer at a low level | `grep jukeboxRoute /etc/alsa/conf.d/90-jukebox-split.conf` (must exist); `amixer -c <usb> sset PCM 100%`; `apply` fixes both |
 | Plays ~1 s (analyser blips) then stops; `mpd.log` shows `Error writing output config file` | active CamillaDSP config not writable by `mpd` (stale `root:0644` copy) | `chmod 0666 /var/lib/jukebox-audio/camilla-active.*.yml`, then `apply`; the plugin now writes it atomically with mode 0666 |
 | Tone stops after reboot | CamillaDSP config regenerated without gains | the installer preserves gains; re-check `grep gain /usr/local/jukebox-audio/cdsp/camilla.*.yml` |
 | Chain refuses to open | files hand-edited and guard reverted mid-play, or device busy | `mpc stop`; `apply`; `verify --with-playback` |

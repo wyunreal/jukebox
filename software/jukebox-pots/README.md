@@ -15,11 +15,11 @@ POT multi second: 8 (raw 430)
 ```
 
 A small daemon reads those lines and applies them to the DAC branch of the
-chain, on **either platform** (`JP_BACKEND=auto|volumio|moode`):
+chain, on the **Volumio** box:
 
 | Pot | Range | Effect |
 | --- | --- | --- |
-| `POT volume` | 0–20 | player volume, 0–100 % |
+| `POT volume` | 0–20 | Volumio volume, 0–100 % |
 | `POT balance` | 0–20, center 10 | pan of the DAC left/right (opposite channel attenuated) |
 | `POT single` | 0–20, center 10 | **bass** shelf, ±12 dB |
 | `POT multi second` | 0–20, center 10 | **treble** shelf, ±12 dB |
@@ -30,9 +30,8 @@ The pots are not hard-wired to a function: `JP_TONE_BASS_POT` and
 (`single` / `multisecond` by default).
 
 The **second, constant-level output that feeds the spectrum analyser is never
-touched** on either platform: volume lives on the DAC branch only and the
-tone shelves live on the DAC branch only, so nothing in this package can
-change its level or response.
+touched**: volume lives on the DAC branch only and the tone shelves live on the
+DAC branch only, so nothing in this package can change its level or response.
 
 ## How it works
 
@@ -43,23 +42,19 @@ PowerAndPotsArduino --USB serial--> jukebox-pots daemon
                                       '- tone    -> CamillaDSP config + SIGHUP (live)
 ```
 
-The platform is detected automatically (`JP_BACKEND`):
+The volume path, balance and tone are those of the **Volumio** chain:
 
-| | Volumio | moOde |
-| --- | --- | --- |
-| Volume | Volumio API (`/api/v1/commands/?cmd=volume`) -> `SoftMaster` | `/var/www/util/vol.sh` -> CamillaDSP fader (volume type "CamillaDSP") |
-| Balance | two channels of `SoftMaster Playback Volume` | `balance_l`/`balance_r` gain filters in `jukebox-tone.yml` |
-| Tone | shelves in `/usr/local/jukebox-audio/cdsp/camilla.*.yml` | shelves in `/usr/share/camilladsp/configs/jukebox-tone.yml` |
+| | Volumio |
+| --- | --- |
+| Volume | Volumio API (`/api/v1/commands/?cmd=volume`) -> `SoftMaster` |
+| Balance | two channels of `SoftMaster Playback Volume` |
+| Tone | shelves in `/usr/local/jukebox-audio/cdsp/camilla.*.yml` |
 
-* **Volume** goes through the player's own volume path, so the UI/API stay in
-  sync. On moOde the volume type must be **CamillaDSP** (the dual-output
-  installer sets it): the knob value becomes the CamillaDSP fader, which only
-  the DAC branch passes through. If the API/CLI is unreachable the daemon
-  writes the ALSA mixer directly instead.
+* **Volume** goes through Volumio's own volume path, so the UI/API stay in
+  sync. If the API is unreachable the daemon writes the ALSA mixer directly
+  instead.
 * **Balance** attenuates the channel opposite to the pan, keeping the other at
-  its current level: on Volumio via the left/right values of `SoftMaster`, on
-  moOde via per-channel gain filters inside the CamillaDSP config (down to
-  `JP_BALANCE_MAX_DB`, default 60 dB, at hard pan).
+  its current level via the left/right values of `SoftMaster`.
 * **Bass/treble** rewrite the two shelf `gain:` values in the CamillaDSP
   config and send the running process a `SIGHUP`; it re-reads the config and
   rebuilds the filters **without interrupting playback**. The rewrite finds
@@ -86,7 +81,7 @@ From this directory (the script copies itself to the Pi and runs it there):
 ./deploy.sh install
 ```
 
-Or directly on the host (Volumio or moOde):
+Or directly on the host (Volumio):
 
 ```sh
 sudo ./install.sh install
@@ -186,8 +181,6 @@ is running. The firmware streams regardless of DTR, so plain `termios` suffices.
 | `--balance-span N` | 10 | pot steps from center to hard pan |
 | `--volume-invert` | off | reverse the volume pot direction |
 | `--balance-invert` | off | reverse left/right |
-| `--backend NAME` | auto | `auto`/`volumio`/`moode` |
-| `--balance-max-db N` | 60 | attenuation at hard pan (moOde backend) |
 | `--no-api` | off | write the mixer directly instead of the player volume path |
 | `--tone` / `--no-tone` | on | enable/disable the bass+treble pots |
 | `--tone-max-db N` | 12 | shelf range at the pot extremes |
@@ -214,10 +207,8 @@ The same values can be set as environment variables in
   changes; only the two channel values of `SoftMaster` are written.
 * The tone pots only work when the dual-output package was installed with the
   tone enabled (the default). Gains are applied live with a `SIGHUP` on
-  `/usr/local/jukebox-audio/cdsp/` (Volumio) or
-  `/usr/share/camilladsp/configs/jukebox-tone.yml` (moOde); the template is
-  updated too, so the setting survives a regeneration by the guard and a
-  reboot.
+  `/usr/local/jukebox-audio/cdsp/`; the template is updated too, so the
+  setting survives a regeneration by the guard and a reboot.
 * The daemon never asserts DTR (see the hardware notes above); the firmware
   reports regardless of it, and the status request is a plain byte.
 * Uninstall removes the service, the unit, the udev rule and
