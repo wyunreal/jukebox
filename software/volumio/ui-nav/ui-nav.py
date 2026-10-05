@@ -26,8 +26,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HOST = os.environ.get("JK_NAV_HOST", "0.0.0.0")
 PORT = int(os.environ.get("JK_NAV_PORT", "3211"))
 ROOT = os.environ.get("JK_NAV_ROOT", "/usr/local/jukebox-ui-nav")
-# Volumio's favourites files (read-only, for the /favourite query).
+# Volumio's favourites/playlist files (read-only, for the queries below).
 FAV_DIR = os.environ.get("JK_NAV_FAV_DIR", "/data/favourites")
+PLAYLIST_DIR = os.environ.get("JK_NAV_PLAYLIST_DIR", "/data/playlist")
+# Prefix for auto-named "save queue as playlist" files.
+PLAYLIST_PREFIX = os.environ.get("JK_NAV_PLAYLIST_PREFIX", "Playlist")
 
 _lock = threading.Lock()
 _clients: "set[queue.Queue]" = set()
@@ -86,6 +89,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/favourite":
             self._favourite()
             return
+        if path == "/next-playlist-name":
+            self._next_playlist_name()
+            return
         if path == "/state":
             self._send(200, json.dumps(_last).encode(), "application/json")
             return
@@ -116,6 +122,28 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             pass
         self._send(200, json.dumps({"favourite": fav}).encode(), "application/json")
+
+    def _next_playlist_name(self) -> None:
+        """Next free "<prefix> N" name, based on the playlists Volumio already
+        has (files in /data/playlist). Query: ?prefix=Playlist (optional)."""
+        from urllib.parse import urlparse, parse_qs
+        q = parse_qs(urlparse(self.path).query)
+        prefix = (q.get("prefix") or [PLAYLIST_PREFIX])[0] or PLAYLIST_PREFIX
+        highest = 0
+        try:
+            for fn in os.listdir(PLAYLIST_DIR):
+                if fn == prefix:
+                    highest = max(highest, 1)
+                    continue
+                if fn.startswith(prefix + " "):
+                    try:
+                        highest = max(highest, int(fn[len(prefix) + 1:]))
+                    except ValueError:
+                        pass
+        except OSError:
+            pass
+        self._send(200, json.dumps({"name": "%s %d" % (prefix, highest + 1)}).encode(),
+                   "application/json")
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path.split("?", 1)[0] != "/update":

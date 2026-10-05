@@ -119,12 +119,31 @@
     return true;
   }
 
+  /* Save the current queue as a playlist, named "Playlist N" (N from the
+     server, based on the playlists already there). Emits through the UI's own
+     socket, the same call the UI's "save queue as playlist" makes. */
+  function saveQueue() {
+    var sock = get("socketService");
+    if (!sock || !sock.emit) return;
+    var url = base + "/next-playlist-name";
+    var req = new XMLHttpRequest();
+    req.onreadystatechange = function () {
+      if (req.readyState !== 4) return;
+      var name = "Playlist 1";
+      try { name = JSON.parse(req.responseText).name || name; } catch (err) {}
+      sock.emit("saveQueueToPlaylist", { name: name });
+    };
+    try { req.open("GET", url, true); req.send(); } catch (err) {}
+  }
+
   function handle(m) {
     if (!m) return;
     if (m.type === "nav") {
       navigate(m.view);
     } else if (m.type === "ui" && m.action === "favourite") {
       toggleFavourite();
+    } else if (m.type === "ui" && m.action === "savequeue") {
+      saveQueue();
     }
   }
 

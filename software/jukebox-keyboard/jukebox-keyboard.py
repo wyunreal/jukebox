@@ -61,6 +61,7 @@ ACTIONS = {
     "OPENCLOSE": _env("JK_KEY_OPENCLOSE", ""),
     "FAVOURITE": _env("JK_KEY_FAVOURITE", ""),
     "CLEAR": _env("JK_KEY_CLEAR", ""),
+    "SAVEQUEUE": _env("JK_KEY_SAVEQUEUE", ""),
 }
 # Volumio command per action. MUTE is handled separately (it reads the current
 # state and toggles), so it is not listed here.
@@ -73,7 +74,7 @@ CMD = {
     "CLEAR": "clearQueue",
 }
 # Order used for lookup and for the probe listing.
-ACTION_ORDER = ("PLAY", "PAUSE", "STOP", "PREV", "NEXT", "MUTE", "OPENCLOSE", "FAVOURITE", "CLEAR")
+ACTION_ORDER = ("PLAY", "PAUSE", "STOP", "PREV", "NEXT", "MUTE", "OPENCLOSE", "FAVOURITE", "CLEAR", "SAVEQUEUE")
 
 # "DOWN r c" is the press event; we act on it so keys feel immediate.
 PRESS_RE = re.compile(r"^DOWN\s+(\d+)\s+(\d+)\s*$")
@@ -158,6 +159,11 @@ def run_action(action: str) -> None:
         # (a socket emit from here would not reach the UI's own connection).
         _post_nav({"type": "ui", "action": "favourite"})
         log("FAVOURITE -> toggle (via UI)")
+        return
+    if action == "SAVEQUEUE":
+        # Ask the UI to save the current queue as a playlist (socket emit).
+        _post_nav({"type": "ui", "action": "savequeue"})
+        log("SAVEQUEUE -> save queue as playlist (via UI)")
         return
     cmd = CMD.get(action)
     if not cmd:

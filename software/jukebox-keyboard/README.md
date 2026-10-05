@@ -41,6 +41,7 @@ The key -> action map lives in `/usr/local/jukebox-keyboard/config.env`
 | `MUTE` | toggles mute (reads the current state, then mute/unmute) |
 | `OPENCLOSE` | toggles the UI between the now-playing home and the play queue |
 | `FAVOURITE` | toggles the current track/station in favourites (music uses Volumio's own path; radios are handled by `ui-nav`, see below) |
+| `SAVEQUEUE` | saves the current queue as a playlist, auto-named `Playlist N` (asks `ui-nav` for the next free name) |
 
 `FAVOURITE` runs through the UI (`software/volumio/ui-nav`), so the heart and
 the toast update. For **webradio** this is not just cosmetic: Volumio's backend

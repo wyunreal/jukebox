@@ -29,9 +29,13 @@ daemon (e.g. jukebox-keyboard)  --POST /update-->  jukebox-ui-nav (this package)
     **webradio** it works around a backend gap (the heart never lights for a
     radio) by reading `/data/favourites/radio-favourites` through the server's
     `/favourite` query and syncing the heart.
+  - `{"type":"ui","action":"savequeue"}` → save the current queue as a playlist,
+    named `Playlist N` (N comes from the server's `/next-playlist-name`, based
+    on the playlists in `/data/playlist`), emitted through the UI's socket.
 
-  The server also exposes `GET /favourite?service=..&uri=..` → `{"favourite":bool}`,
-  used for the webradio workaround.
+  The server also exposes:
+  - `GET /favourite?service=..&uri=..` → `{"favourite":bool}` (webradio workaround).
+  - `GET /next-playlist-name?prefix=..` → `{"name":"Playlist N"}`.
 * `apply.sh` + `jukebox-ui-nav-guard.path` — inject the loader into
   `/volumio/http/www*/index.html` and re-inject after Volumio rewrites them.
 
