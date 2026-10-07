@@ -16,6 +16,11 @@ volume:
                to the ALSA mixer ("SoftMaster Playback Volume" has one value per
                channel).
 
+An optional third pot, "POT aux", attenuates the volume pot: the value sent to
+the player is volume_pot * (aux / 20), so the volume pot is the system ceiling
+and the aux only scales below it (aux at 0 silences).  Older firmware without
+the aux line still works (the aux defaults to full).
+
 Only the DAC branch of the jukebox-audio split is touched.  The second,
 constant-level output that feeds the spectrum analyser is never modified: it
 does not carry the SoftMaster control at all.
@@ -91,6 +96,12 @@ BALANCE_SPAN = _env_int("JP_BALANCE_SPAN", 10) or 1
 BALANCE_INVERT = _env_bool("JP_BALANCE_INVERT", False)
 VOLUME_INVERT = _env_bool("JP_VOLUME_INVERT", False)
 
+# The aux pot (mux channel X2) is an *attenuator* on top of the volume pot: the
+# value sent to the player is volume_pot * (aux / AUX_MAX).  The volume pot is
+# therefore the system's ceiling and the aux only ever scales below it (0 ->
+# silence).  Both pots share the firmware's 0..20 range.
+AUX_MAX = POT_MAX
+
 POLL_MS = _env_int("JP_POLL_MS", 200)
 RESCAN_MS = _env_int("JP_RESCAN_MS", 3000)
 
@@ -113,6 +124,7 @@ CAMILLA_PROC = _env("JP_CAMILLA_PROC", "camilladsp")
 
 VOLUMIO_RE = re.compile(r"^POT volume:\s*(-?\d+)")
 BALANCE_RE = re.compile(r"^POT balance:\s*(-?\d+)")
+AUX_RE = re.compile(r"^POT aux:\s*(-?\d+)")
 # The two spare pots feed the tone control. Which firmware line maps to which
 # function is configurable so we can pin it down by moving each pot.
 TONE_POTS = {
@@ -156,6 +168,11 @@ def map_volume(pot: int, pot_max: int = POT_MAX, volume_max: int = VOLUME_MAX,
     if invert:
         pot = pot_max - pot
     return int(round(pot / float(pot_max) * volume_max))
+
+
+def map_aux(pot: int, aux_max: int = AUX_MAX) -> float:
+    """Aux pot -> attenuation factor in [0.0, 1.0] (0 = silence, 1 = full)."""
+    return float(clamp(int(pot) / float(aux_max), 0.0, 1.0))
 
 
 def map_balance(pot: int, center: int = BALANCE_CENTER, span: int = BALANCE_SPAN,
@@ -521,6 +538,7 @@ class ToneControl:
 class Controller:
     def __init__(self) -> None:
         self.pot_volume: int | None = None
+        self.pot_aux: int | None = None
         self.pot_balance: int | None = None
         self.last_api: int | None = None
         self.last_pan: float | None = None
@@ -568,6 +586,13 @@ class Controller:
                 self.pot_volume = value
                 self.volume_dirty = True
             return
+        m = AUX_RE.match(line)
+        if m:
+            value = int(m.group(1))
+            if value != self.pot_aux:
+                self.pot_aux = value
+                self.volume_dirty = True   # the aux scales the volume pot
+            return
         m = BALANCE_RE.match(line)
         if m:
             self.pot_balance = int(m.group(1))
@@ -581,14 +606,20 @@ class Controller:
     def apply_volume(self) -> None:
         if self.pot_volume is None or not self.volume_dirty:
             return
-        pct = map_volume(self.pot_volume)
+        # The aux pot scales the volume pot (the ceiling): real = master * aux.
+        # Without an aux reading yet (older firmware) it defaults to full.
+        ratio = map_aux(self.pot_aux) if self.pot_aux is not None else 1.0
+        pct = int(round(map_volume(self.pot_volume) * ratio))
         if pct == self.last_api and read_softmaster() is not None:
             self.volume_dirty = False
             return
         if set_volume(pct):
             self.last_api = pct
             self.volume_dirty = False
-            log("volume pot %s -> %d%%" % (self.pot_volume, pct))
+            log("volume pot %s x aux %s%% -> %d%%" % (
+                self.pot_volume,
+                round(ratio * 100),
+                pct))
 
     def apply_balance(self) -> None:
         if self.pot_balance is None:
@@ -650,7 +681,7 @@ def probe() -> int:
         while time.monotonic() < deadline and len(seen) < 4:
             lines, alive = read_lines(fd, 0.3)
             for line in lines:
-                if VOLUMIO_RE.match(line) or BALANCE_RE.match(line):
+                if VOLUMIO_RE.match(line) or BALANCE_RE.match(line) or AUX_RE.match(line):
                     seen.append(line)
             if not alive:
                 break
@@ -663,6 +694,10 @@ def probe() -> int:
 def selftest() -> int:
     assert map_volume(0) == 0 and map_volume(20) == 100 and map_volume(10) == 50
     assert map_volume(20, invert=True) == 0
+    assert map_aux(0) == 0.0 and map_aux(20) == 1.0 and map_aux(10) == 0.5
+    assert int(round(map_volume(20) * map_aux(10))) == 50    # master 100% x aux 50%
+    assert int(round(map_volume(10) * map_aux(10))) == 25    # master 50%  x aux 50%
+    assert int(round(map_volume(20) * map_aux(0))) == 0      # aux at min -> silence
     assert map_balance(10) == 0.0 and map_balance(20) == 1.0 and map_balance(0) == -1.0
     assert balance_lr(99, 0.0) == (99, 99)
     assert balance_lr(99, 1.0) == (0, 99)

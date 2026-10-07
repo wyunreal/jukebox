@@ -12,6 +12,8 @@ const byte POWER_SW_PIN = 14;
 const byte MUX_ANALOG_PIN = A0;
 const byte MUX_SELECT_PIN = 7;
 
+const byte MUX_SELECT2_PIN = 5;
+
 const byte MULTI_PUSH_SWITCH_PIN = 4;
 
 const byte ROTARY_SWITCH_1_PIN = 8;
@@ -44,6 +46,13 @@ const PotPoint POT_MULTI_SECOND_POINTS[] = {
   {0, 20},
   {318, 10},
   {533, 0},
+};
+
+// Spare pot on mux channel X2. Placeholder linear calibration (edit to match
+// the real pot, like the other tables).
+const PotPoint POT_AUX_POINTS[] = {
+  {0, 0},
+  {1023, 20},
 };
 
 const byte NUM_SAMPLES = 10;
@@ -114,7 +123,7 @@ void reportPot(const char *name, int value, int raw) {
   Serial.println(")");
 }
 
-ReportedValue potVolume, potSingle, potBalance, potMultiSecond, powTristate, powSw, multiPush, rotary;
+ReportedValue potVolume, potSingle, potBalance, potMultiSecond, potAux, powTristate, powSw, multiPush, rotary;
 
 void setup() {
   Serial.begin(9600);
@@ -128,6 +137,7 @@ void setup() {
   digitalWrite(POT_SINGLE_POWER_PIN, LOW);
 
   pinMode(MUX_SELECT_PIN, OUTPUT);
+  pinMode(MUX_SELECT2_PIN, OUTPUT);
 
   setupPower();
 }
@@ -151,6 +161,7 @@ void loop() {
         potSingle.value = NEVER;
         potBalance.value = NEVER;
         potMultiSecond.value = NEVER;
+        potAux.value = NEVER;
         powTristate.value = NEVER;
         powSw.value = NEVER;
         multiPush.value = NEVER;
@@ -179,7 +190,12 @@ void loop() {
   int potVolumeRaw = readAveraged(POT_VOLUME_PIN);
   int potVolumeReading = scalePot(potVolumeRaw, POT_VOLUME_POINTS);
 
+  // Mux channels: A = MUX_SELECT_PIN, B = MUX_SELECT2_PIN (C tied to GND).
+  //   A=0 B=0 -> X0: multi second pot
+  //   A=1 B=0 -> X1: balance pot
+  //   A=0 B=1 -> X2: aux pot
   digitalWrite(MUX_SELECT_PIN, LOW);
+  digitalWrite(MUX_SELECT2_PIN, LOW);
   delayMicroseconds(50);
   int multiSecondPotRaw = readAveraged(MUX_ANALOG_PIN);
   int multiSecondPotReading = scalePot(multiSecondPotRaw, POT_MULTI_SECOND_POINTS);
@@ -187,6 +203,12 @@ void loop() {
   digitalWrite(MUX_SELECT_PIN, HIGH);
   int balancePotRaw = readAveraged(MUX_ANALOG_PIN);
   int balancePotReading = scalePot(balancePotRaw, POT_BALANCE_POINTS);
+  delayMicroseconds(50);
+  digitalWrite(MUX_SELECT_PIN, LOW);
+  digitalWrite(MUX_SELECT2_PIN, HIGH);
+  delayMicroseconds(50);
+  int auxPotRaw = readAveraged(MUX_ANALOG_PIN);
+  int auxPotReading = scalePot(auxPotRaw, POT_AUX_POINTS);
 
   bool multiPushSwitch = readDigitalStable(MULTI_PUSH_SWITCH_PIN);
   bool rotarySwitch1 = readDigitalStable(ROTARY_SWITCH_1_PIN);
@@ -215,6 +237,11 @@ void loop() {
 
   if (throttleReport(potMultiSecond, multiSecondPotReading, 0)) {
     reportPot("POT multi second: ", potMultiSecond.value, multiSecondPotRaw);
+    reported = true;
+  }
+
+  if (throttleReport(potAux, auxPotReading, 0)) {
+    reportPot("POT aux: ", potAux.value, auxPotRaw);
     reported = true;
   }
 

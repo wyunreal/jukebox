@@ -72,6 +72,7 @@ POT volume: 15 (raw 700)
 POT single: 20 (raw 1020)
 POT balance: 10 (raw 512)
 POT multi second: 0 (raw 540)
+POT aux: 12 (raw 640)
 POWER tristate: CENTER|LEFT|RIGHT
 POWER switch: ON|OFF
 MULTI PUSH switch: ON|OFF
@@ -81,9 +82,27 @@ MULTI ROTARY switch: OFF|SW1|SW2
 
 Potentiometers are scaled through per-segment calibration tables
 (`POT_VOLUME_POINTS`, `POT_SINGLE_POINTS`, `POT_BALANCE_POINTS`,
-`POT_MULTI_SECOND_POINTS` in `src/main.cpp`): each entry maps a raw reading
-to a value, interpolating between points. Adjust them there to calibrate
-your hardware.
+`POT_MULTI_SECOND_POINTS`, `POT_AUX_POINTS` in `src/main.cpp`): each entry maps
+a raw reading to a value, interpolating between points. Adjust them there to
+calibrate your hardware.
+
+## Multiplexer
+
+The Pro Micro only breaks out A0-A3 and all four are used, so extra pots go
+through a **CD4051B** 8:1 analog mux whose common output feeds `A0`. Address
+bits (C tied to GND; `INH` and `VEE` to GND):
+
+| A (D7) | B (D5) | Channel | Pin | Pot |
+|---|---|---|---|---|
+| 0 | 0 | X0 | 13 | multi second |
+| 1 | 0 | X1 | 14 | balance |
+| 0 | 1 | X2 | 15 | **aux** (spare) |
+| 1 | 1 | X3 | 12 | spare |
+
+The firmware reads the three channels in turn each loop by setting A
+(`MUX_SELECT_PIN`) and B (`MUX_SELECT2_PIN`). To add a fourth pot, wire the next
+channel to a free mux input and add its read (with a `PotPoint` table and a
+`ReportedValue`) in the same block.
 
 ## USB identification
 
@@ -103,7 +122,8 @@ string. `jukebox-pots` selects the port by this string.
 | 14 | Power switch | `INPUT`, HIGH = pressed |
 | 15 | Single pot supply | enabled only during its reading |
 | A0 | Mux analog input | |
-| 7 | Mux select | LOW = multi second pot, HIGH = balance pot |
+| 7 | Mux address A | LOW = multi second pot, HIGH = balance pot |
+| 5 | Mux address B | LOW = X0/X1, HIGH = X2 aux pot (see above) |
 | A1 | Volume pot | |
 | A2 | Power tristate pot | raw > 500 → RIGHT, > 100 → LEFT, else CENTER |
 | A3 | Single pot | |

@@ -12,6 +12,7 @@ POT volume: 15 (raw 700)
 POT balance: 10 (raw 512)
 POT single: 12 (raw 640)
 POT multi second: 8 (raw 430)
+POT aux: 18 (raw 900)
 POWER switch: ON
 ```
 
@@ -24,10 +25,27 @@ chain, on the **Volumio** box:
 
 | Pot | Range | Effect |
 | --- | --- | --- |
-| `POT volume` | 0–20 | Volumio volume, 0–100 % |
+| `POT volume` | 0–20 | Volumio volume ceiling, 0–100 % |
+| `POT aux` | 0–20, 20 = full | **auxiliary volume**: attenuates the ceiling, 0 = silence |
 | `POT balance` | 0–20, center 10 | pan of the DAC left/right (opposite channel attenuated) |
 | `POT single` | 0–20, center 10 | **bass** shelf, ±8 dB |
 | `POT multi second` | 0–20, center 10 | **treble** shelf, ±8 dB |
+
+The two volume pots **multiply**: the volume pot sets the system ceiling and
+the aux pot scales it down. The value sent to the player is
+`volume_pot × (aux / 20)`, so the aux never exceeds the ceiling and reaches
+silence at 0:
+
+| `POT volume` | `POT aux` | Volumio |
+| --- | --- | --- |
+| 20 (100 %) | 20 | 100 % |
+| 20 (100 %) | 10 | 50 % |
+| 10 (50 %) | 20 | 50 % |
+| 10 (50 %) | 10 | 25 % |
+| 20 (100 %) | 0 | 0 % (silence) |
+
+Both are re-applied whenever either pot moves. Older firmware without the
+`POT aux` line still works: the aux then defaults to full.
 
 Center (10) on either tone pot means **0 dB**, i.e. bit-for-bit transparent.
 The pots are not hard-wired to a function: `JP_TONE_BASS_POT` and
@@ -56,8 +74,9 @@ The volume path, balance and tone are those of the **Volumio** chain:
 | Tone | shelves in `/usr/local/jukebox-audio/cdsp/camilla.*.yml` |
 
 * **Volume** goes through Volumio's own volume path, so the UI/API stay in
-  sync. If the API is unreachable the daemon writes the ALSA mixer directly
-  instead.
+  sync, and is the product of the volume pot (ceiling) and the aux pot
+  (attenuation). If the API is unreachable the daemon writes the ALSA mixer
+  directly instead.
 * **Balance** attenuates the channel opposite to the pan, keeping the other at
   its current level via the left/right values of `SoftMaster`.
 * **Bass/treble** rewrite the two shelf `gain:` values in the CamillaDSP
