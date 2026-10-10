@@ -74,6 +74,10 @@ software/jukebox-keyboard/      # playback keys from the KeyboardArduino
 │   └── jukebox-keyboard.service / 89-jukebox-keyboard.rules / config.env.in
 └── README.md                   # design doc: key map, detection
 
+software/storage/               # host storage: RAID 1 music library
+├── raid-music.sh               # set up / adopt the mirror + auto-mount (on-host)
+└── README.md                   # design doc: power, UAS quirk, replacing a disk
+
 skills/jukebox/SKILL.md         # agent skill to operate and troubleshoot the box
 ```
 
@@ -163,6 +167,38 @@ installed as-is, so a fresh or re-installed box gets the same keys (a one-off
 `--watch`. Install with `software/jukebox-keyboard/deploy.sh install`; see its
 [README](software/jukebox-keyboard/README.md).
 
+## Disks & RAID 1 (music library)
+
+The music library lives on **two 3.5" hard drives in USB enclosures, mirrored
+(RAID 1)** and mounted where Volumio expects removable storage, so it isn't
+capped by the SD card:
+
+| | |
+|---|---|
+| Array | `/dev/md0`, `raid1`, name `<host>:music` |
+| Mount | `/media` — what Volumio's `/mnt/USB` symlinks to, i.e. the **`USB`** source |
+| Music | `/media/Music/` (SMB share **`USB`**) |
+
+The set-up/adopt script and the full design notes (power requirements, the
+JMicron JMS583 UAS workaround, replacing a failed disk) are in
+[software/storage/](software/storage/README.md). From a development machine:
+
+```sh
+scp software/storage/raid-music.sh volumio@<host>:/tmp/
+ssh volumio@<host> 'echo <password> | sudo -S -p "" \
+  bash /tmp/raid-music.sh install --disk-a /dev/sda --disk-b /dev/sdb'
+```
+
+It is idempotent and safe: an existing array is only **adopted**, never
+reformatted; a non-empty disk is **refused** unless `--reformat` is given.
+`verify` / `status` check the array, the mount and the disks.
+
+> **Power matters.** Two 3.5" drives cannot run off the USB bus, and a mirror
+> writes to both at once. Without a proper power supply the drives brown out
+> under load (USB disconnects, I/O errors, degraded array). These enclosures
+> (`152d:0583`) are also unstable with the **UAS** driver, so `install` pins
+> `usb-storage.quirks=152d:0583:u` to force Bulk-Only Transport.
+
 ## Adding music over the network (SMB)
 
 Volumio already runs Samba (`smbd`/`nmbd`) with **guest** shares, so you don't
@@ -180,32 +216,36 @@ own under the network neighbourhood / "Network" in your file manager.
 
 | Share | What it is | Where it lands on the Pi |
 |---|---|---|
-| `Internal Storage` | the built-in disk: this is where music normally goes | `/data/INTERNAL` → `Music/` |
-| `USB` | whatever USB drive is plugged into the Pi | `/mnt/USB` |
+| `Internal Storage` | the SD card: fine for a small library | `/data/INTERNAL` → `Music/` |
+| `USB` | the RAID 1 music library (two mirrored HDDs) | `/mnt/USB` → `/media` |
 | `NAS` | a staging area for files destined for a NAS | `/mnt/NAS` |
 
 There is **no username or password** (the shares are `guest ok = yes`); connect
-as guest/anonymous and open the share you want. For permanent music on this box
-use **`Internal Storage`** and drop the files in the **`Music`** folder, i.e.
-`Internal Storage\Music\...`. The library shows every folder under the MPD music
+as guest/anonymous and open the share you want. For the music library use
+**`USB`** and drop the files in its **`Music`** folder (or at the root), i.e.
+`USB\Music\...`. The library shows every folder under the MPD music
 root, so anything you place in there is indexed.
 
 ### From the command line
 
 ```sh
-# Linux (mount at /mnt/jukebox; the share name has a space)
+# Linux (mount the RAID music library at /mnt/jukebox)
 sudo mkdir -p /mnt/jukebox
-sudo mount -t cifs '//<host>/Internal Storage' /mnt/jukebox \
+sudo mount -t cifs '//<host>/USB' /mnt/jukebox \
   -o guest,iocharset=utf8,file_mode=0777,dir_mode=0777
 cp -r ~/Music/* /mnt/jukebox/Music/
 sudo umount /mnt/jukebox
 
 # macOS
-open 'smb://<host>/Internal%20Storage'
+open 'smb://<host>/USB'
 
 # smbclient (guest, one-off copy)
-smbclient '//<host>/Internal Storage' -N -c 'cd Music; lcd ~/Music; mput *'
+smbclient '//<host>/USB' -N -c 'cd Music; lcd ~/Music; mput *'
 ```
+
+For a small library you can use the SD card's `Internal Storage` share
+(`//<host>/Internal Storage`, `Music/`) instead — the share name has a space,
+so quote it.
 
 ### After copying: re-scan the library
 
