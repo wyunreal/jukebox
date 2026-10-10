@@ -16,6 +16,11 @@ hand over SSH.
 | Music goes in | `/media/Music/` (SMB share **`USB`**, or `Internal Storage` stays on the SD) |
 | Boot | assembled by the `mdadm` udev rules (`/etc/mdadm/mdadm.conf`) and mounted from `/etc/fstab`; the `raid1`/`md_mod` modules are pinned in `/etc/modules-load.d/raid.conf` |
 
+`/media` and `/media/Music` are left **world-writable (`0777`)** so the SMB
+guest can drop music there — Samba maps the guest to `nobody`
+(`map to guest = Bad User`), which a plain `0755` ext4 root would refuse. It's
+the same convention as Volumio's own mounts (`Internal Storage` / `USB`).
+
 ## The important hardware caveats
 
 1. **The disks need their own power supply.** A 3.5" drive needs 12 V + 5 V and

@@ -142,9 +142,12 @@ mount_library() {
   if ! mountpoint -q "$MNT"; then
     mount "$MNT" || die "could not mount $MNT"
   fi
-  chown volumio:volumio "$MNT" 2>/dev/null || true
   mkdir -p "$MNT/Music"
-  chown volumio:volumio "$MNT/Music" 2>/dev/null || true
+  chown volumio:volumio "$MNT" "$MNT/Music" 2>/dev/null || true
+  # World-writable so the SMB guest can drop music in: Samba maps the guest to
+  # `nobody` (`map to guest = Bad User`), and a 0755 ext4 root would refuse it.
+  # Volumio's own mounts (Internal Storage / USB) are 0777 for the same reason.
+  chmod 0777 "$MNT" "$MNT/Music" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
