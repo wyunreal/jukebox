@@ -1,6 +1,6 @@
 ---
 name: jukebox
-description: Operate and troubleshoot the user's homemade jukebox — a Raspberry Pi 4B running Volumio with a custom dual audio output (I2S DAC speakers, volume-controlled; a second fixed-level output, currently a USB sound card, feeding a hardware spectrum analyser) and a DSI touch screen. Use this skill whenever the user mentions "the jukebox", "la jukebox", "el jukebox", "Volumio", "la rocola", the music box, its audio/volume/spectrum analyser/touch screen, or asks to connect to it, SSH in, check/fix/change its sound setup, or run the audio installer — even when they don't explicitly say "jukebox".
+description: Operate and troubleshoot the user's homemade jukebox — a Raspberry Pi 4B running Volumio with a custom dual audio output (I2S DAC speakers, volume-controlled; a second fixed-level output, currently a USB sound card, feeding a hardware spectrum analyser) and a DSI touch screen. Use this skill whenever the user mentions "the jukebox", "la jukebox", "el jukebox", "Volumio", "la rocola", the music box, its audio/volume/spectrum analyser/touch screen, its music storage/HDDs (RAID), or asks to connect to it, SSH in, check/fix/change its sound or storage setup, or run the audio installer — even when they don't explicitly say "jukebox".
 ---
 
 # Jukebox (Volumio on Raspberry Pi)
@@ -17,6 +17,9 @@ kernel 6.12.y) with:
 - **DSI touch screen** (plugin `touch_display`, `volumio-kiosk.service`,
   Xorg on :0).
 - The 3.5 mm jack and both HDMI outputs exist but are **not** in use.
+- **Two 3.5" HDDs in USB enclosures, RAID 1** (mirrored) holding the music
+  library, mounted at `/media` — which is what Volumio's `USB` source symlinks
+  to. Set up / adopted with `software/storage/raid-music.sh`. See below.
 
 The audio chain is custom ("jukebox-audio"): an ALSA `multi` split where the
 software volume (`SoftMaster`) sits only on the DAC branch, so the Volumio
@@ -92,6 +95,9 @@ software/jukebox-keyboard/deploy.sh -H volumio@<host> install --key-action next 
 | Pot overlay | `systemctl is-active jukebox-overlay.service` | `active` (port 3210) |
 | UI nav | `systemctl is-active jukebox-ui-nav.service` | `active` (port 3211) |
 | Keyboard | `systemctl is-active jukebox-keyboard.service` | `active` (if installed) |
+| RAID array | `cat /proc/mdstat` | `md0 ... [2/2] [UU]` |
+| Music disk mount | `findmnt /media` | `ext4`, source `/dev/md0` |
+| USB storage quirk | `grep -o 'usb-storage[^ ]*' /boot/cmdline.txt` | `usb-storage.quirks=152d:0583:u` |
 
 If the USB card is unplugged, the chain automatically falls back to DAC-only
 (speakers keep playing); plug it back and the guard/udev re-activates the split
@@ -156,6 +162,31 @@ sudo /usr/local/jukebox-ui/jukebox-ui.sh apply     # re-assert (used by guard)
 - The HDMI-off hook turns the phantom output off inside the X session; do
   **not** enable HDMI audio (see golden rules).
 
+## Disks / RAID (music library)
+
+The music library lives on **two 3.5" HDDs in USB enclosures, mirrored (RAID
+1)** and mounted at `/media` (Volumio's `USB` source). The on-host helper is in
+this repo at `software/storage/raid-music.sh` (design doc in its README). It is
+**not a package** — run it by hand:
+
+```sh
+scp software/storage/raid-music.sh volumio@<host>:/tmp/
+ssh volumio@<host> 'echo <pass> | sudo -S -p "" bash /tmp/raid-music.sh install'
+sudo bash /tmp/raid-music.sh status     # array, mount, disks, SMART
+sudo bash /tmp/raid-music.sh verify     # pass/fail
+sudo bash /tmp/raid-music.sh apply      # re-assert config + mount
+```
+
+- **Idempotent & safe**: an existing array is only *adopted* (never reformatted);
+  with no array it uses two *empty* disks and **refuses** a disk that has data
+  unless `--reformat` is passed.
+- Array `/dev/md0`, ext4 label `MUSIC`; music goes in `/media/Music/` (the SMB
+  **`USB`** share).
+- Boot assembly comes from `/etc/mdadm/mdadm.conf` + `/etc/fstab`; `raid1` /
+  `md_mod` are pinned in `/etc/modules-load.d/raid.conf`.
+- `install` also pins the JMS583 workaround `usb-storage.quirks=152d:0583:u` in
+  `/boot/cmdline.txt` (see golden rules). A Volumio update can drop it.
+
 ## Common tasks
 
 **Change/read volume (the supported way):**
@@ -169,10 +200,11 @@ Volumio's playback engine).
 
 **Add music over SMB:** the box runs Samba with guest shares and advertises
 itself as host **`Jukebox`**, so it shows up by itself in the file manager's
-Network view. Shares: `Internal Storage` (`/data/INTERNAL`), `USB`
-(`/mnt/USB`), `NAS` (`/mnt/NAS`) — no password, connect as guest. Put music in
-`Internal Storage/Music`. Mount from Linux with
-`sudo mount -t cifs '//<host>/Internal Storage' /mnt/jukebox -o guest`.
+Network view. Shares: `USB` (`/mnt/USB` → the RAID music library), `Internal
+Storage` (`/data/INTERNAL`, the SD card — small) and `NAS` (`/mnt/NAS`) — no
+password, connect as guest. Put music in the **`USB`** share's `Music/` folder
+(or at its root). Mount from Linux with
+`sudo mount -t cifs '//<host>/USB' /mnt/jukebox -o guest`.
 After copying, rescan with `mpc update` (Volumio's REST API has **no**
 `updateLibrary`/`rescan` command; the UI button uses MPD's socket).
 
@@ -228,6 +260,14 @@ states above.
   `cdsp` plugin feeds silence when the application stalls, instead of raising
   an XRUN. Don't shrink that buffer or reintroduce the fatal path: a player
   hiccup would surface as "failed to open output device" in Volumio.
+- **The two music HDDs need their own power, and they must not use UAS.** They
+  are 3.5" drives in cheap USB enclosures; the USB bus cannot power them, and a
+  mirror writes to both at once, so underpowered drives drop off the bus under
+  load (USB disconnects, I/O errors, a degraded array). These JMicron JMS583
+  bridges are also unstable with the **UAS** driver, so `/boot/cmdline.txt`
+  pins `usb-storage.quirks=152d:0583:u` (Bulk-Only Transport). A Volumio update
+  can reset `cmdline.txt` and the cuelgues return — re-run
+  `software/storage/raid-music.sh install`.
 - Reboots are normal after audio changes; the guard + `alsa-restore` restore
   everything (including the `SoftMaster` element) on boot.
 
@@ -255,6 +295,9 @@ states above.
 | Overlay never shows | server down, nothing connected, or UI loader gone | `systemctl status jukebox-overlay`; `curl localhost:3210/state`; `sudo /usr/local/jukebox-overlay/apply.sh`; restart `volumio-kiosk` |
 | Overlay gone after a Volumio update | `index.html` rewritten | `systemctl start jukebox-overlay-guard.service` (re-injects), or re-run `apply.sh` |
 | A keyboard key does nothing | key not mapped, or wrong board | `journalctl -u jukebox-keyboard` (shows `unmapped key r,c`); identify with `jukebox-keyboard.py --watch`, edit `software/jukebox-keyboard/files/keymap.conf` and re-install (or a one-off `--key-action <action> r,c`) |
+| Music array degraded (`[2/1]`) or a disk missing | a disk dropped — almost always power/USB, not the disk | `cat /proc/mdstat`; `dmesg \| grep -iE 'usb\|uas\|reset\|I/O error'`; fix the PSU; then `sudo mdadm /dev/md0 --add /dev/sdX` and wait for `[2/2] [UU]` |
+| `USB` share / `/media` empty or not mounted | array not assembled, or the fstab entry is gone | `sudo software/storage/raid-music.sh apply` (or `install`); `cat /proc/mdstat` |
+| Disks keep disconnecting under load | underpowered USB supply, or UAS still active | use a powered PSU/hub; re-run `raid-music.sh install` to re-pin `usb-storage.quirks=152d:0583:u`, then reboot |
 
 ## Repo map (for reference)
 
@@ -298,10 +341,15 @@ states above.
   identify a key with `.../jukebox-keyboard.py --watch`. Selects the board by the
   `Jukebox Keyboard` USB product string. Install with
   `software/jukebox-keyboard/deploy.sh install`.
+- `software/storage/` — **not a package**: `raid-music.sh`, an on-host helper to
+  create/adopt the RAID 1 music library on the two HDDs and mount it at `/media`
+  (Volumio's `USB` source), including the JMS583 UAS quirk. Idempotent; refuses
+  to reformat a non-empty disk without `--reformat`. See its README.
 - `deploy-all.sh` (repo root) — install/uninstall/verify/status for all packages
   in dependency order.
 - This skill lives in `skills/jukebox/`.
 
 When the user asks for jukebox work and anything looks different from this
 file, trust the live box: `jukebox-audio.sh status` + `verify` +
-`/var/log/jukebox-audio.log` tell the real story.
+`/var/log/jukebox-audio.log` tell the real story for audio, and
+`software/storage/raid-music.sh status` (`cat /proc/mdstat`) for the disks.
