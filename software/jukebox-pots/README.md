@@ -289,7 +289,7 @@ The same values can be set as environment variables in
   missing, and the standard `jukebox-audio` install materializes it too.
 * Balance is relative to the current level, so it keeps working across volume
   changes; only the two channel values of `SoftMaster` are written.
-* The tone pots only work when the dual-output package was installed with the
+* The tone pots only work when the multi-output package was installed with the
   tone enabled (the default). Gains are applied live with a `SIGHUP` on
   `/usr/local/jukebox-audio/cdsp/`; the template is updated too, so the
   setting survives a regeneration by the guard and a reboot.

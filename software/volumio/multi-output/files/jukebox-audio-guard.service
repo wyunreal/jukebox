@@ -1,5 +1,5 @@
 [Unit]
-Description=Jukebox dual-output audio guard (re-assert configuration)
+Description=Jukebox multi-output audio guard (re-assert configuration)
 Wants=alsa-restore.service
 After=alsa-restore.service local-fs.target
 

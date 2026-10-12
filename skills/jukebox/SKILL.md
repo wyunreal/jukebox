@@ -56,7 +56,7 @@ credentials into files.
 ## Install / operate everything
 
 From the repo (development machine) a single wrapper drives every package over
-SSH in dependency order — `dual-output` → `ui-boost` → `jukebox-pots` →
+SSH in dependency order — `multi-output` → `ui-boost` → `jukebox-pots` →
 `pot-overlay` → `ui-nav` → `jukebox-keyboard` (reversed for uninstall):
 
 ```sh
@@ -116,7 +116,7 @@ within seconds. That is by design.
 ## The jukebox-audio tool
 
 Canonical files + helper live in `/usr/local/jukebox-audio/`; the engine is in
-this repo at `software/volumio/dual-output/files/jukebox-audio.sh` (full design
+this repo at `software/volumio/multi-output/files/jukebox-audio.sh` (full design
 docs in its README).
 
 ```sh
@@ -160,7 +160,7 @@ it as `analyser trim :`.
   those files the guard will revert them — edit the canonical copies in
   `/usr/local/jukebox-audio/` and run `apply` instead (or stop the path unit
   while experimenting).
-- From a dev machine: `software/volumio/dual-output/deploy.sh install
+- From a dev machine: `software/volumio/multi-output/deploy.sh install
   --second-output usb` copies the installer over SSH and runs it remotely.
 
 ## The jukebox-ui tool (touch screen speed)
@@ -349,7 +349,7 @@ states above.
 
 ## Repo map (for reference)
 
-- `software/volumio/dual-output/` — scripts (`deploy.sh`, `uninstall.sh`) plus
+- `software/volumio/multi-output/` — scripts (`deploy.sh`, `uninstall.sh`) plus
   `files/` with the engine (`jukebox-audio.sh`), the guard units/udev rule, the
   armv7 `camilladsp` binary and the armhf `cdsp` plugin + source. Full design doc
   in its README (the ALSA split, the CamillaDSP tone step, variants, USB-card

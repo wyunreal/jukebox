@@ -11,7 +11,8 @@
 #   ./deploy-all.sh [options] [command]
 #
 # Commands (default: install):
-#   install      install / re-assert every package (second output: usb)
+#   install      install / re-assert every package (second output: usb,
+#                third S/PDIF branch pinned by card name; see DUAL_OUTPUT_ARGS)
 #   uninstall    remove every package (reverse order)
 #   verify       run each package's verification
 #   status       show each package's status
@@ -33,12 +34,29 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Dependency order: player/audio chain first, then the accessories.
 PACKAGES=(
-  software/volumio/dual-output
+  software/volumio/multi-output
   software/volumio/ui-boost
   software/jukebox-pots
   software/volumio/pot-overlay
   software/volumio/ui-nav
   software/jukebox-keyboard
+)
+
+# This jukebox's audio-chain configuration, kept here so a rebuild from scratch
+# reproduces exactly the same chain. The two USB sound cards are pinned by NAME
+# + a substring of their long name (the kernel's generic ids Device/Device_1
+# change and must not be hardcoded):
+#   card 4  "USB PnP Sound Device"  -> analyser branch (--usb-card-match)
+#   card 5  "DSD TECH USB Audio Device" -> S/PDIF third branch (--spdif-card-match)
+# Keep the two full-speed USB cards on DIFFERENT USB hubs (one in a Pi port, one
+# on the external hub); two on the same single-TT hub break (VL805).
+DUAL_OUTPUT_ARGS=(
+  --second-output usb
+  --usb-card-match "USB PnP"
+  --third-output spdif
+  --spdif-card-match "DSD TECH"
+  --spdif-rate 48000
+  --spdif-gain 0.5
 )
 
 HOST="${JUKEBOX_HOST:-}"
@@ -76,9 +94,9 @@ for pkg in "${order[@]}"; do
   [ -f "$REPO_DIR/$pkg/deploy.sh" ] || die "missing $pkg/deploy.sh"
 
   extras=()
-  # This jukebox's second output is the USB sound card.
-  [ "$pkg" = software/volumio/dual-output ] && [ "$command" = install ] \
-    && extras=(--second-output usb)
+  # This jukebox's audio chain: second output + pinned analyser/S-PDIF cards.
+  [ "$pkg" = software/volumio/multi-output ] && [ "$command" = install ] \
+    && extras=("${DUAL_OUTPUT_ARGS[@]}")
 
   say "$command: $pkg"
   "$REPO_DIR/$pkg/deploy.sh" "${common[@]}" "$command" "${extras[@]}" \

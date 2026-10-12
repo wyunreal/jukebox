@@ -279,7 +279,7 @@ cmd_verify() {
       ok "tone control config present (CamillaDSP shelves)"
       tone_ok=1
     fi
-    [ "$tone_ok" = 1 ] || warn "tone control enabled but no CamillaDSP config found (install the dual-output package)"
+    [ "$tone_ok" = 1 ] || warn "tone control enabled but no CamillaDSP config found (install the multi-output package)"
     if [ -x /usr/local/bin/camilladsp ]; then
       ok "CamillaDSP present"
     else

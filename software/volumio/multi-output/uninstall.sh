@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# uninstall.sh - remove the jukebox dual-output feature from the Volumio host.
+# uninstall.sh - remove the jukebox multi-output feature from the Volumio host.
 #
 # Thin wrapper so the package keeps the usual layout (scripts in the root, the
 # engine + everything that lands on the host under files/). It just delegates to

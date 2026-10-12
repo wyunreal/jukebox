@@ -1,4 +1,4 @@
-# jukebox dual output (Volumio + Raspberry Pi)
+# jukebox multi-output (Volumio + Raspberry Pi)
 
 Adds a second, **constant-level** audio output while keeping the I2S DAC as
 the main, volume-controlled output, plus a **bass/treble tone control** on the
@@ -52,7 +52,7 @@ volumio -> softvolume -> jukeboxRoute -> jukeboxSplit (multi)
 
 The installer auto-detects the cards; if the chosen second output is not
 present at install time (e.g. USB unplugged), it installs a **DAC-only
-fallback** and switches to the full dual chain automatically when the device
+fallback** and switches to the full multi-output chain automatically when the device
 appears (udev handles hotplug).
 
 ### Several USB cards: pinning the analyser card
@@ -268,7 +268,7 @@ device can disappear (USB unplugged, extractor off, ...), the chain is
 managed dynamically:
 
 * second device absent -> **daconly** variant: only the DAC plays;
-* second device present -> **usb** (or **hdmi**/**jack**) dual-output variant;
+* second device present -> **usb** (or **hdmi**/**jack**) multi-output variant;
 * second present and `--third-output spdif` with the S/PDIF card present ->
   **usbspdif** (three branches). If the S/PDIF card is missing the chain drops
   back to **usb**, never to daconly.

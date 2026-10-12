@@ -5,7 +5,7 @@ A homemade jukebox built around a **Raspberry Pi 4B** running
 for power control and input reading (potentiometers, switches and a 4x4 button
 matrix) on **Arduino Micro (ATmega32U4)** boards, FreeCAD 3D models of the
 hardware (screen, Raspberry Pi, HDD and electronics supports), the audio
-software that gives the Pi a custom dual output, and the operations skill used
+software that gives the Pi a custom multi-output, and the operations skill used
 to run and troubleshoot the box.
 
 ## Status
@@ -32,7 +32,7 @@ hardware/3d-models/             # FreeCAD models, grouped by part
 └── Spectrum/                   # spectrum display frame
 
 software/volumio/              # Volumio flavour (the live box)
-├── dual-output/                # custom dual audio output for Volumio
+├── multi-output/                # custom multi-output audio for Volumio
 │   ├── deploy.sh / uninstall.sh  # scripts: ship+run over SSH, thin uninstall
 │   ├── files/                  # everything that lands on the Pi
 │   │   ├── jukebox-audio.sh    # installer / verify / status (engine)
@@ -130,13 +130,13 @@ No STL/STEP exports are committed yet — export from FreeCAD as needed.
 
 ## Audio software
 
-Custom dual audio output (I2S DAC + constant-level second output for the
+Custom multi-output audio (I2S DAC + constant-level second output for the
 spectrum analyser) with a live bass/treble tone control, for **Volumio**.
 Step-by-step, from scratch: see
 [Installing from scratch](#installing-from-scratch).
 
 See the full design doc:
-[software/volumio/dual-output/README.md](software/volumio/dual-output/README.md)
+[software/volumio/multi-output/README.md](software/volumio/multi-output/README.md)
 (engine `files/jukebox-audio.sh`, shipped over SSH by `deploy.sh`).
 
 Physical volume and balance from the PowerAndPots Arduino's potentiometers are
@@ -309,7 +309,7 @@ disable it per package with `--no-power-button`:
 
 ```sh
 # one package at a time (same effect as the orchestrator, with its own flags)
-software/volumio/dual-output/deploy.sh  -H volumio@<host> -p <pass> install --second-output usb
+software/volumio/multi-output/deploy.sh  -H volumio@<host> -p <pass> install --second-output usb
 software/volumio/ui-boost/deploy.sh     -H volumio@<host> -p <pass> install
 software/jukebox-pots/deploy.sh         -H volumio@<host> -p <pass> install --power-off-delay 45
 software/volumio/pot-overlay/deploy.sh  -H volumio@<host> -p <pass> install
@@ -322,12 +322,12 @@ software/jukebox-keyboard/deploy.sh     -H volumio@<host> -p <pass> install --ke
 1. Flash Volumio and finish its first-run wizard (network, audio output).
    Note the host and the `volumio` user's password.
 
-2. Install the dual output + tone (DAC branch + constant-level USB analyser;
+2. Install the multi-output + tone (DAC branch + constant-level USB analyser;
    the tone engine CamillaDSP and the patched `cdsp` plugin are shipped by this
    repo):
 
    ```sh
-   cd software/volumio/dual-output
+   cd software/volumio/multi-output
    ./deploy.sh --host volumio@<host> install --second-output usb
    ```
 
@@ -385,7 +385,7 @@ Verification / state any time (all packages at once, or a single one):
 ```sh
 ./deploy-all.sh -H volumio@<host> verify                # every package
 ./deploy-all.sh -H volumio@<host> status                # every package
-./software/volumio/dual-output/deploy.sh --host volumio@<host> verify --with-playback
+./software/volumio/multi-output/deploy.sh --host volumio@<host> verify --with-playback
 ./software/jukebox-pots/deploy.sh --host volumio@<host> status
 ```
 
@@ -396,7 +396,7 @@ If `sudo` on the box needs a password, add `-p <password>` or export
 
 | Package | What it installs |
 |---|---|
-| `software/volumio/dual-output` | ALSA split + CamillaDSP tone step + guards + MPD buffers for Volumio |
+| `software/volumio/multi-output` | ALSA split + CamillaDSP tone step + guards + MPD buffers for Volumio |
 | `software/volumio/pot-overlay` | On-screen balance/bass/treble indicator (overlay server + injected UI loader) |
 | `software/volumio/ui-nav` | UI navigation channel (a daemon can switch the screen; used by the open/close key) |
 | `software/jukebox-pots` | `jukebox-pots.service` (volume/balance/tone from the Arduino; power button halts the Pi, on by default) |

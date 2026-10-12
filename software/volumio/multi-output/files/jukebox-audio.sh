@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# jukebox-audio.sh - dual audio output for a Volumio jukebox on Raspberry Pi
+# jukebox-audio.sh - multi-output audio for a Volumio jukebox on Raspberry Pi
 #
 # Splits Volumio's audio pipeline so the same audio goes to BOTH:
 #   * the I2S DAC (main output, speakers), whose level is controlled by the
@@ -610,7 +610,7 @@ tone_or_post() {
 render_snippet_usb() {
   cat <<EOF
 # jukebox-audio variant: usb
-# Managed by jukebox-audio (dual output). Do not edit by hand.
+# Managed by jukebox-audio (multi-output). Do not edit by hand.
 # Splits the 'volumio' pipeline into two outputs:
 #   - I2S DAC with software volume (SoftMaster) -> controlled by Volumio
 #   - USB DAC at a constant level                -> not affected by volume
@@ -687,7 +687,7 @@ EOF
 render_snippet_usbspdif() {
   cat <<EOF
 # jukebox-audio variant: usbspdif
-# Managed by jukebox-audio (dual output). Do not edit by hand.
+# Managed by jukebox-audio (multi-output). Do not edit by hand.
 # Splits the 'volumio' pipeline into three outputs:
 #   - I2S DAC with software volume (SoftMaster)   -> controlled by Volumio
 #   - USB DAC at a constant level (analyser)      -> not affected by volume
@@ -778,7 +778,7 @@ EOF
 render_snippet_jack() {
   cat <<EOF
 # jukebox-audio variant: jack
-# Managed by jukebox-audio (dual output). Do not edit by hand.
+# Managed by jukebox-audio (multi-output). Do not edit by hand.
 # Splits the 'volumio' pipeline into two outputs:
 #   - I2S DAC with software volume (SoftMaster) -> controlled by Volumio
 #   - 3.5 mm jack at a fixed level               -> not affected by volume
@@ -853,7 +853,7 @@ EOF
 render_snippet_hdmi() {
   cat <<EOF
 # jukebox-audio variant: hdmi
-# Managed by jukebox-audio (dual output). Do not edit by hand.
+# Managed by jukebox-audio (multi-output). Do not edit by hand.
 # Splits the 'volumio' pipeline into two outputs:
 #   - I2S DAC with software volume (SoftMaster) -> controlled by Volumio
 #   - HDMI (audio extractor) at a constant level -> not affected by volume
@@ -1521,7 +1521,7 @@ install_units() {
   else
   cat >/etc/systemd/system/jukebox-audio-guard.service <<EOF
 [Unit]
-Description=Jukebox dual-output audio guard (re-assert configuration)
+Description=Jukebox multi-output audio guard (re-assert configuration)
 Wants=alsa-restore.service
 After=alsa-restore.service local-fs.target
 
@@ -1698,7 +1698,7 @@ cmd_install() {
     *) die "invalid second output: $SECOND_OUTPUT (use jack|hdmi|usb|none)" ;;
   esac
 
-  say "Installing jukebox dual output (v$VERSION)"
+  say "Installing jukebox multi-output (v$VERSION)"
   echo "    DAC card      : $DAC_CARD"
   echo "    Second output : $SECOND_OUTPUT"
   if [ "$SECOND_OUTPUT" = "jack" ]; then
@@ -2113,7 +2113,7 @@ cmd_status() {
 
 cmd_uninstall() {
   require_root
-  say "Uninstalling jukebox dual output"
+  say "Uninstalling jukebox multi-output"
   remove_units
   ok "guard units and udev rule removed"
 
