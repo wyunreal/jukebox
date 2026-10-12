@@ -1,6 +1,6 @@
 ---
 name: jukebox
-description: Operate and troubleshoot the user's homemade jukebox — a Raspberry Pi 4B running Volumio with a custom multi-output audio chain (I2S DAC speakers, volume-controlled; a USB sound card feeding a hardware spectrum analyser whose level a 3-position switch selects; optionally a third fixed-level USB S/PDIF feed) and a DSI touch screen. Use this skill whenever the user mentions "the jukebox", "la jukebox", "el jukebox", "Volumio", "la rocola", the music box, its audio/volume/spectrum analyser/touch screen, its music storage/HDDs (RAID), or asks to connect to it, SSH in, check/fix/change its sound or storage setup, or run the audio installer — even when they don't explicitly say "jukebox".
+description: Operate and troubleshoot the user's homemade jukebox — a Raspberry Pi 4B running Volumio with a custom multi-output audio chain (I2S DAC speakers, volume-controlled, with a pure-direct ON/OFF switch; a USB sound card feeding a hardware spectrum analyser whose level a 3-position switch selects; optionally a third fixed-level USB S/PDIF feed) and a DSI touch screen. Use this skill whenever the user mentions "the jukebox", "la jukebox", "el jukebox", "Volumio", "la rocola", the music box, its audio/volume/spectrum analyser/touch screen, its music storage/HDDs (RAID), or asks to connect to it, SSH in, check/fix/change its sound or storage setup, or run the audio installer — even when they don't explicitly say "jukebox".
 ---
 
 # Jukebox (Volumio on Raspberry Pi)
@@ -13,8 +13,10 @@ kernel 6.12.y) with:
 - **I2S DAC** (PCM1794A, ALSA card `sndrpirpidac`) → speakers. Volume-controlled.
 - **Second output** for a hardware spectrum analyser. A **USB sound card**
   (`USB PnP Sound Device`, C-Media `08bb:2902` / PCM2902). Its ALSA branch has
-  no volume; a **3-position switch** sets the card's own `PCM` playback level
-  (normal / 40 % lower / off) through `jukebox-pots`. Its ALSA card number
+  no volume; a **3-position `MULTI ROTARY switch`** sets the card's own `PCM`
+  playback level (normal / 40 % lower / off) through `jukebox-pots`. The
+  **`MULTI PUSH switch`** is the **pure-direct** ON/OFF switch for the I2S DAC
+  (ON = bypass volume/balance/tone, bit-perfect). Each card's ALSA number
   **and id** are dynamic — always find it by name (long-name match).
 - **Optional third fixed-level output**: a second USB card used as a clean
   **S/PDIF** feed (no volume, no analyser EQ) for an external DAC/receiver. On
@@ -337,6 +339,8 @@ states above.
 | Pots do nothing but `jukebox-pots` is active | board not enumerated, wrong port, or `SoftMaster` missing | `sudo /usr/local/jukebox-pots/jukebox-pots.py --probe`; `journalctl -u jukebox-pots` |
 | Tone pots do nothing | tone off (`JB_TONE`), no CamillaDSP config, or the daemon can't write it | check `ls /usr/local/jukebox-audio/cdsp/`; `journalctl -u jukebox-pots \| grep tone`; reinstall `jukebox-audio` with tone on |
 | Spectrum switch does nothing | analyser card absent/mismatched, or `JP_SPECTRUM=0` | `jukebox-pots.py --probe` (shows the spectrum card/control); `journalctl -u jukebox-pots \| grep spectrum`; check `JP_SPECTRUM_CARD_MATCH` matches the analyser card's long name |
+| Volume/balance/bass/treble do nothing | `MULTI PUSH` pure-direct switch is ON (by design: the pots are ignored) | toggle it OFF; `journalctl -u jukebox-pots \| grep direct` |
+| Pure direct gives no extra fidelity | DAC softvol tops out at −0.5 dB (a `softvol` limit), not a true 0 dB | fix the softvol max (camilla flat is already bit-perfect) |
 | No sound after installing the tone | CamillaDSP `chunksize` too large for the cdsp pipe (deadlock, XRUN) | keep `chunksize: 512` in the tone template; `apply`; reinstall |
 | Power button short press does nothing | `JP_POWER_BUTTON=0` (disabled), or firmware not reflashed | install `jukebox-pots` without `--no-power-button`; reflash the PowerAndPots Arduino; check `journalctl -u jukebox-pots` |
 | Pi shuts down but the relay never cuts | firmware without the `POWER: off` command, or serial port dead at shutdown | reflash the Arduino; the cut is Arduino-side (`POWER_OFF_DELAY_MS`, default 30 s) |
@@ -365,9 +369,11 @@ states above.
   Arduino over USB serial and drives the DAC volume (Volumio API), balance
   (per-channel `SoftMaster`) and bass/treble (CamillaDSP config + `SIGHUP`, live).
   Install with `software/jukebox-pots/deploy.sh install`; check with `... status`.
-  It drives the DAC branch (volume/balance/tone) and also the analyser card's own
-  `PCM` level from the 3-position `MULTI ROTARY` switch (`OFF`/`SW1`/`SW2` →
-  normal / 40 % lower / off), without modifying the ALSA split. It also watches
+  It drives the DAC branch (volume/balance/tone), the analyser card's own `PCM`
+  level from the 3-position `MULTI ROTARY` switch (`OFF`/`SW1`/`SW2` → normal /
+  40 % lower / off), and **pure direct** from the `MULTI PUSH` ON/OFF switch (ON
+  bypasses volume/balance/tone on the DAC: `SoftMaster` at max + CamillaDSP
+  shelves at 0 dB, pots ignored), without modifying the ALSA split. It also watches
   Arduino's `POWER:` lines: a short power-button press halts the Pi and the
   Arduino cuts the relay ~30 s later (delay lives on the board, powered from
   5VSB); the long press stays the immediate hard cut. On by default; disable

@@ -101,8 +101,10 @@ Four potentiometers of the PowerAndPots Arduino drive the DAC (speakers) only:
 | `POT multi second` | treble shelf (±8 dB, center = flat) |
 
 A 3-position switch selects the **spectrum-analyser** level on that card's own
-hardware control: normal (the card's usual level), 40 % lower, or off. The
-volume, balance and tone pots never affect the analyser feed. See
+hardware control: normal (the card's usual level), 40 % lower, or off. An
+ON/OFF switch makes the DAC output **pure direct** (bit-perfect: volume,
+balance and tone bypassed). The volume, balance and tone pots never affect the
+analyser feed. See
 [software/jukebox-pots/README.md](software/jukebox-pots/README.md).
 
 ## Firmware

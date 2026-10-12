@@ -3,7 +3,8 @@
 Turns four potentiometers of the **PowerAndPotsArduino** into physical
 controls **for the speakers (I2S DAC) only**: volume, balance, bass and
 treble. A 3-position switch then selects the **level of the spectrum-analyser
-output**.
+output**, and an ON/OFF switch makes the DAC output **pure direct**
+(bit-perfect: volume, balance and tone bypassed).
 
 The Arduino prints their state on its USB serial port (9600 baud, only on
 change):
@@ -16,6 +17,7 @@ POT multi second: 8 (raw 430)
 POT aux: 18 (raw 900)
 POWER switch: ON
 MULTI ROTARY switch: OFF
+MULTI PUSH switch: OFF
 ```
 
 The Arduino also reports its power button (`POWER: soft off` on a short press,
@@ -33,6 +35,7 @@ chain, on the **Volumio** box:
 | `POT single` | 0–20, center 10 | **bass** shelf, ±8 dB |
 | `POT multi second` | 0–20, center 10 | **treble** shelf, ±8 dB |
 | `MULTI ROTARY switch` | OFF / SW1 / SW2 | **spectrum level**: normal / attenuated / off |
+| `MULTI PUSH switch` | OFF / ON | **pure direct**: ON = DAC bit-perfect (volume/balance/tone bypassed) |
 
 The two volume pots **multiply**: the volume pot sets the system ceiling and
 the aux pot scales it down. The value sent to the player is
@@ -68,7 +71,9 @@ PowerAndPotsArduino --USB serial--> jukebox-pots daemon
                                       | volume  -> player volume (DAC branch)
                                       | balance -> DAC pan (per-channel)
                                       | tone    -> CamillaDSP config + SIGHUP (live)
-                                      '- switch  -> analyser card PCM volume/mute
+                                      | switch  -> analyser card PCM volume/mute
+                                      | direct  -> DAC bypass (bit-perfect)
+                                      '- direct  -> ignore the pots while on
 ```
 
 The volume path, balance and tone are those of the **Volumio** chain:
@@ -79,6 +84,7 @@ The volume path, balance and tone are those of the **Volumio** chain:
 | Balance | two channels of `SoftMaster Playback Volume` |
 | Tone | shelves in `/usr/local/jukebox-audio/cdsp/camilla.*.yml` |
 | Spectrum | the analyser USB card's own `PCM` playback control |
+| Pure direct | `SoftMaster` at max + CamillaDSP shelves at 0 dB (bit-perfect) |
 
 * **Volume** goes through Volumio's own volume path, so the UI/API stay in
   sync, and is the product of the volume pot (ceiling) and the aux pot
@@ -94,6 +100,9 @@ The volume path, balance and tone are those of the **Volumio** chain:
 * **Spectrum** sets the analyser USB card's own `PCM` playback volume (and
   mute), found by long name so it survives the dynamic card index; the ALSA
   split is never rewritten. See [Spectrum level switch](#spectrum-level-switch).
+* **Pure direct** (the ON/OFF switch) pins `SoftMaster` to its maximum, both
+  channels equal, and drives the CamillaDSP shelves to 0 dB, ignoring the pots;
+  see [Pure direct switch](#pure-direct-switch).
 * The daemon has **no third-party dependencies** (no `pyserial`); it opens the
   serial port with `termios` and re-scans for it when missing, so it survives
   the Arduino being unplugged/replugged. A udev rule also restarts it when a
@@ -150,6 +159,31 @@ Force a level without the switch (handy to check the attenuation by ear/eye):
 ```sh
 sudo /usr/local/jukebox-pots/jukebox-pots.py --spectrum 2   # 1 normal, 2 attenuated, 3 off
 ```
+
+## Pure direct switch
+
+The ON/OFF switch makes the I2S DAC branch play **pure direct**: the volume,
+balance and tone processing are bypassed so the DAC receives an untouched
+stream, and the volume/aux/balance/tone pots are ignored while it is on.
+
+| Switch | Effect on the DAC (speakers) |
+| --- | --- |
+| `OFF` | normal: the pots drive volume, balance, bass and treble |
+| `ON` | pure direct: `SoftMaster` at its maximum, both channels equal, CamillaDSP shelves at 0 dB |
+
+With the switch ON the DAC runs at full scale, so **the speakers play at full
+volume** — use an external volume control if you need one. The tone is bypassed
+by driving the CamillaDSP shelves to 0 dB, which is bit-for-bit transparent
+(verified byte-for-byte: a flat/empty CamillaDSP pipeline reproduces the input
+exactly). The spectrum switch and feed are unaffected.
+
+Which firmware line carries the switch is chosen with `--direct-source`
+(`push`/`power`, default `push`); turn the whole feature off with `--no-direct`.
+When the switch returns to OFF the current pot positions are re-applied.
+
+> The DAC's software volume tops out at −0.5 dB (a softvol limit), so "pure
+> direct" is exact only once that is corrected to a true 0 dB. CamillaDSP's
+> flat pipeline is already exact.
 
 ## Power button (soft power off)
 
@@ -334,6 +368,8 @@ is running. The firmware streams regardless of DTR, so plain `termios` suffices.
 | `--spectrum-atten-pct N` | 40 | attenuation of position 2 (% amplitude) |
 | `--spectrum-db-min DB` | −28.37 | card calibration: dB at raw 0 |
 | `--spectrum-db-step DB` | 0.1875 | card calibration: dB per raw step |
+| `--direct` / `--no-direct` | on | the ON/OFF switch makes the DAC pure direct |
+| `--direct-source SRC` | push | firmware line with the ON/OFF switch (`push`/`power`) |
 | `--power-button` / `--no-power-button` | on | short power-button press halts the Pi |
 | `--power-off-delay N` | 30 | seconds the Arduino waits before cutting the relay |
 | `--power-cmd CMD` | `systemctl poweroff` | command used to halt the Pi |

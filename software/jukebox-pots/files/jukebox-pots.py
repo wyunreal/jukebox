@@ -126,7 +126,7 @@ TONE_BASS_INVERT = _env_bool("JP_TONE_BASS_INVERT", False)
 TONE_TREBLE_INVERT = _env_bool("JP_TONE_TREBLE_INVERT", False)
 TONE_TEMPLATE = _env("JP_TONE_TEMPLATE", "/usr/local/jukebox-audio/cdsp/camilla.%s.yml")
 TONE_ACTIVE = _env("JP_TONE_ACTIVE", "/var/lib/jukebox-audio/camilla-active.%s.yml")
-TONE_VARIANTS = ("usb", "hdmi", "jack", "daconly")
+TONE_VARIANTS = ("usb", "usbspdif", "hdmi", "jack", "daconly")
 # CamillaDSP is (re)started by the cdsp plugin; we locate it to reload it.
 CAMILLA_PROC = _env("JP_CAMILLA_PROC", "camilladsp")
 
@@ -195,6 +195,21 @@ SPECTRUM_SWITCHES = {
     "rotary":   (r"^MULTI ROTARY switch:\s*(\S+)", {"OFF": 1, "SW1": 2, "SW2": 3}),
     "push":     (r"^MULTI PUSH switch:\s*(\S+)",   {"OFF": 1, "ON": 2}),
     "tristate": (r"^POWER tristate:\s*(\S+)",      {"CENTER": 1, "LEFT": 2, "RIGHT": 3}),
+}
+
+# --- pure direct (bit-perfect DAC) switch -----------------------------------
+# An ON/OFF switch makes the I2S DAC output "pure direct": the volume, balance
+# and tone processing are bypassed (the DAC gets the untouched stream) and the
+# volume/aux/balance/tone pots are ignored while it is on. The DAC branch's
+# software volume is set to its maximum, and CamillaDSP's shelves are driven to
+# 0 dB (a flat pipeline is bit-for-bit transparent -- verified byte-for-byte).
+# The spectrum switch is unaffected.
+DIRECT_ENABLE = _env_bool("JP_DIRECT", True)
+# Which firmware line carries the ON/OFF switch (push|power).
+DIRECT_SOURCE = _env("JP_DIRECT_SOURCE", "push")
+DIRECT_SWITCHES = {
+    "push":  (r"^MULTI PUSH switch:\s*(\S+)", {"OFF": False, "ON": True}),
+    "power": (r"^POWER switch:\s*(\S+)",      {"OFF": False, "ON": True}),
 }
 
 
@@ -488,6 +503,7 @@ class ToneControl:
         self.treble_db: float | None = None
         self.last: tuple[float, float] | None = None
         self.variant: str | None = None
+        self.direct = False          # pure direct -> force flat (0 dB) shelves
         self._warned = False
 
     def pot_feed(self, name: str, value: int) -> None:
@@ -567,7 +583,9 @@ class ToneControl:
             return
         if self.bass_db is None or self.treble_db is None:
             return
-        if self.last == (self.bass_db, self.treble_db):
+        # Pure direct forces both shelves to 0 dB (bit-for-bit transparent).
+        want = (0.0, 0.0) if self.direct else (self.bass_db, self.treble_db)
+        if self.last == want:
             return
         # Rewrite every variant template (so the gains persist whatever branch
         # the chain runs) plus the active config.
@@ -575,9 +593,9 @@ class ToneControl:
         paths += [TONE_ACTIVE % v for v in TONE_VARIANTS if os.path.exists(TONE_ACTIVE % v)]
         wrote = False
         for path in paths:
-            if self._rewrite(path, "bass", self.bass_db):
+            if self._rewrite(path, "bass", want[0]):
                 wrote = True
-            self._rewrite(path, "treble", self.treble_db)
+            self._rewrite(path, "treble", want[1])
         if not wrote and not any(os.path.exists(TONE_ACTIVE % v) for v in TONE_VARIANTS):
             if not self._warned:
                 log("tone: no CamillaDSP config found (is jukebox-audio installed?)")
@@ -585,8 +603,9 @@ class ToneControl:
             return
         self._warned = False
         self._reload_camilla()
-        self.last = (self.bass_db, self.treble_db)
-        log("tone bass %+.1f dB / treble %+.1f dB" % (self.bass_db, self.treble_db))
+        self.last = want
+        log("tone bass %+.1f dB / treble %+.1f dB%s"
+            % (want[0], want[1], " (pure direct)" if self.direct else ""))
 
 
 # ------------------------------------------------------------------ spectrum
@@ -717,6 +736,10 @@ class Controller:
         self.next_ensure = 0.0
         self.tone = ToneControl()
         self.spectrum = SpectrumControl()
+        self.direct: bool | None = None
+        self._direct_re_src, self._direct_labels = DIRECT_SWITCHES.get(
+            DIRECT_SOURCE, (None, {}))
+        self._direct_re = re.compile(self._direct_re_src) if self._direct_re_src else None
         self.poweroff_handled = False
 
     def request_poweroff(self, fd: int) -> None:
@@ -774,6 +797,29 @@ class Controller:
                 self.tone.pot_feed(name, int(m.group(1)))
                 return
         self.spectrum.feed(line)
+        self._feed_direct(line)
+
+    def _feed_direct(self, line: str) -> None:
+        if not DIRECT_ENABLE or self._direct_re is None:
+            return
+        m = self._direct_re.match(line)
+        if not m:
+            return
+        want = self._direct_labels.get(m.group(1).upper())
+        if want is None or want == self.direct:
+            return
+        self.direct = want
+        log("pure direct %s" % ("ON (bit-perfect DAC)" if want else "OFF (normal)"))
+        # On leaving direct, re-assert the pot-driven volume/balance.
+        if not want:
+            self.volume_dirty = True
+            self.last_api = None
+
+    def apply_direct(self) -> None:
+        """Pure direct: unity volume, both channels equal (no balance)."""
+        _, hi = softmaster_range()
+        if read_softmaster() != (hi, hi):
+            write_softmaster(hi, hi)
 
     def apply_volume(self) -> None:
         if self.pot_volume is None or not self.volume_dirty:
@@ -819,8 +865,12 @@ class Controller:
             write_softmaster(*want)
 
     def tick(self) -> None:
-        self.apply_volume()
-        self.apply_balance()
+        if self.direct:
+            self.apply_direct()
+        else:
+            self.apply_volume()
+            self.apply_balance()
+        self.tone.direct = bool(self.direct)
         self.tone.apply()
         self.spectrum.apply()
 
@@ -856,6 +906,8 @@ def probe() -> int:
                   % (scard, SPECTRUM_CONTROL, raw, rawmax, "unmuted" if unmuted else "muted"))
         else:
             print("spectrum      : card %s has no control %r" % (scard, SPECTRUM_CONTROL))
+    print("pure direct   : %s (%s switch)" % (
+        "enabled" if DIRECT_ENABLE else "disabled", DIRECT_SOURCE))
     print("power button  : %s (delay %ds)" % (
         "enabled" if POWER_BUTTON else "disabled", POWER_OFF_DELAY_S))
     if port:
@@ -949,6 +1001,15 @@ def selftest() -> int:
         spec = SpectrumControl()
         spec.feed("MULTI ROTARY switch: SW1")
         assert spec.level == 2
+    # pure direct: the ON/OFF switch maps to the direct flag.
+    assert DIRECT_SWITCHES["push"][1]["ON"] is True
+    assert DIRECT_SWITCHES["push"][1]["OFF"] is False
+    if DIRECT_SOURCE == "push" and DIRECT_ENABLE:
+        ctrl = Controller()
+        ctrl._feed_direct("MULTI PUSH switch: ON")
+        assert ctrl.direct is True
+        ctrl._feed_direct("MULTI PUSH switch: OFF")
+        assert ctrl.direct is False
     print("selftest ok")
     return 0
 

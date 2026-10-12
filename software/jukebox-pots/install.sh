@@ -65,6 +65,11 @@
 #   --spectrum-db-min DB / --spectrum-db-step DB
 #                          card calibration: dB at raw 0 and dB per raw step
 #                          (defaults: -28.37 / 0.1875)
+#   --direct / --no-direct
+#                          the ON/OFF switch makes the I2S DAC output pure
+#                          direct: volume, balance and tone are bypassed (default: on)
+#   --direct-source SRC    firmware line with the ON/OFF switch: push|power
+#                          (default: push)
 #
 # Everything that lands on the host lives in files/ (readable, human) and is
 # copied or rendered from there; this script only orchestrates.
@@ -74,7 +79,7 @@
 #
 set -euo pipefail
 
-VERSION="1.5.0"
+VERSION="1.6.0"
 
 APPLY_DIR="/usr/local/jukebox-pots"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -112,6 +117,8 @@ SPECTRUM_BASE_DB="-20.13"
 SPECTRUM_ATTEN_PCT="40"
 SPECTRUM_DB_MIN="-28.37"
 SPECTRUM_DB_STEP="0.1875"
+DIRECT_ENABLE="1"
+DIRECT_SOURCE="push"
 
 # ------------------------------------------------------------------- helpers
 
@@ -123,7 +130,7 @@ die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 require_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 $*"; }
 
-usage() { sed -n '2,74p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,79p' "$0" | sed 's/^# \{0,1\}//'; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
@@ -183,7 +190,8 @@ write_config() {
     "SPECTRUM_CARD=$SPECTRUM_CARD" "SPECTRUM_CARD_MATCH=$SPECTRUM_CARD_MATCH" \
     "SPECTRUM_CONTROL=$SPECTRUM_CONTROL" "SPECTRUM_BASE_DB=$SPECTRUM_BASE_DB" \
     "SPECTRUM_ATTEN_PCT=$SPECTRUM_ATTEN_PCT" \
-    "SPECTRUM_DB_MIN=$SPECTRUM_DB_MIN" "SPECTRUM_DB_STEP=$SPECTRUM_DB_STEP"
+    "SPECTRUM_DB_MIN=$SPECTRUM_DB_MIN" "SPECTRUM_DB_STEP=$SPECTRUM_DB_STEP" \
+    "DIRECT_ENABLE=$DIRECT_ENABLE" "DIRECT_SOURCE=$DIRECT_SOURCE"
 }
 
 install_files() {
@@ -222,6 +230,10 @@ cmd_install() {
     rotary|push|tristate) ;;
     *) die "--spectrum-source must be rotary|push|tristate (got: $SPECTRUM_SOURCE)" ;;
   esac
+  case "$DIRECT_SOURCE" in
+    push|power) ;;
+    *) die "--direct-source must be push|power (got: $DIRECT_SOURCE)" ;;
+  esac
   case "$SPECTRUM_ATTEN_PCT" in
     ''|*[!0-9]*) die "--spectrum-atten-pct must be 0..99 (got: $SPECTRUM_ATTEN_PCT)" ;;
   esac
@@ -251,6 +263,11 @@ cmd_install() {
     echo "                   position 1 ${SPECTRUM_BASE_DB} dB, position 2 -${SPECTRUM_ATTEN_PCT}% amplitude, position 3 off"
   else
     echo "    spectrum     : disabled"
+  fi
+  if [ "$DIRECT_ENABLE" = "1" ]; then
+    echo "    pure direct  : $DIRECT_SOURCE switch -> ON bypasses volume/balance/tone (bit-perfect DAC)"
+  else
+    echo "    pure direct  : disabled"
   fi
   echo "    power button : $([ "$POWER_BUTTON" = 1 ] && echo "halts the Pi (relay off after ${POWER_OFF_DELAY}s)" || echo 'disabled')"
   local platform backend_desc
@@ -352,6 +369,12 @@ cmd_verify() {
     esac
   else
     warn "spectrum: disabled (--no-spectrum): the switch is ignored"
+  fi
+
+  if [ "${JP_DIRECT:-1}" = "1" ]; then
+    ok "pure direct: ${JP_DIRECT_SOURCE:-push} switch bypasses volume/balance/tone on the DAC"
+  else
+    warn "pure direct: disabled (--no-direct): the ON/OFF switch is ignored"
   fi
 
   if [ "${TONE_ENABLE:-1}" = "1" ]; then
@@ -458,6 +481,10 @@ main() {
       --spectrum-db-min=*) SPECTRUM_DB_MIN="${1#*=}"; shift ;;
       --spectrum-db-step) SPECTRUM_DB_STEP="$2"; shift 2 ;;
       --spectrum-db-step=*) SPECTRUM_DB_STEP="${1#*=}"; shift ;;
+      --direct) DIRECT_ENABLE=1; shift ;;
+      --no-direct) DIRECT_ENABLE=0; shift ;;
+      --direct-source) DIRECT_SOURCE="$2"; shift 2 ;;
+      --direct-source=*) DIRECT_SOURCE="${1#*=}"; shift ;;
       -h|--help) usage; exit 0 ;;
       install|verify|status) mode="$1"; shift ;;
       *) die "unknown argument: $1" ;;
