@@ -340,7 +340,6 @@ states above.
 | Tone pots do nothing | tone off (`JB_TONE`), no CamillaDSP config, or the daemon can't write it | check `ls /usr/local/jukebox-audio/cdsp/`; `journalctl -u jukebox-pots \| grep tone`; reinstall `jukebox-audio` with tone on |
 | Spectrum switch does nothing | analyser card absent/mismatched, or `JP_SPECTRUM=0` | `jukebox-pots.py --probe` (shows the spectrum card/control); `journalctl -u jukebox-pots \| grep spectrum`; check `JP_SPECTRUM_CARD_MATCH` matches the analyser card's long name |
 | Volume/balance/bass/treble do nothing | `MULTI PUSH` pure-direct switch is ON (by design: the pots are ignored) | toggle it OFF; `journalctl -u jukebox-pots \| grep direct` |
-| Pure direct gives no extra fidelity | DAC softvol tops out at −0.5 dB (a `softvol` limit), not a true 0 dB | fix the softvol max (camilla flat is already bit-perfect) |
 | No sound after installing the tone | CamillaDSP `chunksize` too large for the cdsp pipe (deadlock, XRUN) | keep `chunksize: 512` in the tone template; `apply`; reinstall |
 | Power button short press does nothing | `JP_POWER_BUTTON=0` (disabled), or firmware not reflashed | install `jukebox-pots` without `--no-power-button`; reflash the PowerAndPots Arduino; check `journalctl -u jukebox-pots` |
 | Pi shuts down but the relay never cuts | firmware without the `POWER: off` command, or serial port dead at shutdown | reflash the Arduino; the cut is Arduino-side (`POWER_OFF_DELAY_MS`, default 30 s) |

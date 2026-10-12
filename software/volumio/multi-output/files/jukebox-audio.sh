@@ -78,7 +78,7 @@
 #
 set -euo pipefail
 
-VERSION="1.2.4"
+VERSION="1.2.5"
 
 APPLY_DIR="/usr/local/jukebox-audio"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -143,6 +143,14 @@ SPDIF_GAIN="${JB_SPDIF_GAIN:-1.0}"
 SPDIF_FORMAT="${JB_SPDIF_FORMAT:-}"
 JACK_LEVEL="${JB_JACK_LEVEL:-0dB}"          # 0.00 dB == full clean level
 JACK_LEVEL_RAW="${JB_JACK_LEVEL_RAW:-0}"
+# The DAC software volume (softvol). Its top integer value must land on exactly
+# 0 dB so a bit-perfect "pure direct" is possible: softvol maps value v to
+# min + (max-min)*v/resolution, and the control's top value is resolution-1, so
+# the plain -50..0 range stops at -0.50 dB. max=+0.5 / min=-49.5 with
+# resolution 100 puts v=99 at exactly 0.00 dB (and v=0 at -49.5 dB).
+SOFTVOL_MAX_DB="${JB_SOFTVOL_MAX_DB:-0.5}"
+SOFTVOL_MIN_DB="${JB_SOFTVOL_MIN_DB:--49.5}"
+SOFTVOL_RESOLUTION="${JB_SOFTVOL_RESOLUTION:-100}"
 # Analyser branch bass trim (see ANALYSER BASS TRIM above).
 ANALYSER_TRIM="${JB_ANALYSER_TRIM:-on}"       # on | off
 ANALYSER_FREQ_HZ="${JB_ANALYSER_FREQ_HZ:-60}" # low-shelf corner frequency
@@ -662,9 +670,9 @@ pcm.volumioSoftVol {
         card        "$DAC_CARD"
         device      0
     }
-    max_dB 0.0
-    min_dB -50.0
-    resolution 100
+    max_dB $SOFTVOL_MAX_DB
+    min_dB $SOFTVOL_MIN_DB
+    resolution $SOFTVOL_RESOLUTION
 }
 
 $(render_analyser_eq "jukeboxUsb" "$USB_RATE")
@@ -748,9 +756,9 @@ pcm.volumioSoftVol {
         card        "$DAC_CARD"
         device      0
     }
-    max_dB 0.0
-    min_dB -50.0
-    resolution 100
+    max_dB $SOFTVOL_MAX_DB
+    min_dB $SOFTVOL_MIN_DB
+    resolution $SOFTVOL_RESOLUTION
 }
 
 $(render_analyser_eq "jukeboxUsb" "$USB_RATE")
@@ -830,9 +838,9 @@ pcm.volumioSoftVol {
         card        "$DAC_CARD"
         device      0
     }
-    max_dB 0.0
-    min_dB -50.0
-    resolution 100
+    max_dB $SOFTVOL_MAX_DB
+    min_dB $SOFTVOL_MIN_DB
+    resolution $SOFTVOL_RESOLUTION
 }
 
 $(render_analyser_eq "jukeboxJack" "48000")
@@ -905,9 +913,9 @@ pcm.volumioSoftVol {
         card        "$DAC_CARD"
         device      0
     }
-    max_dB 0.0
-    min_dB -50.0
-    resolution 100
+    max_dB $SOFTVOL_MAX_DB
+    min_dB $SOFTVOL_MIN_DB
+    resolution $SOFTVOL_RESOLUTION
 }
 
 $(render_analyser_eq "jukeboxHdmi" "$HDMI_RATE")
@@ -947,9 +955,9 @@ pcm.volumioSoftVol {
         card        "$DAC_CARD"
         device      0
     }
-    max_dB 0.0
-    min_dB -50.0
-    resolution 100
+    max_dB $SOFTVOL_MAX_DB
+    min_dB $SOFTVOL_MIN_DB
+    resolution $SOFTVOL_RESOLUTION
 }
 EOF
 }
@@ -1066,6 +1074,9 @@ JB_SPDIF_GAIN="$SPDIF_GAIN"
 JB_SPDIF_FORMAT="$SPDIF_FORMAT"
 JB_JACK_LEVEL="$JACK_LEVEL"
 JB_JACK_LEVEL_RAW="$JACK_LEVEL_RAW"
+JB_SOFTVOL_MAX_DB="$SOFTVOL_MAX_DB"
+JB_SOFTVOL_MIN_DB="$SOFTVOL_MIN_DB"
+JB_SOFTVOL_RESOLUTION="$SOFTVOL_RESOLUTION"
 JB_ANALYSER_TRIM="$ANALYSER_TRIM"
 JB_ANALYSER_FREQ_HZ="$ANALYSER_FREQ_HZ"
 JB_ANALYSER_GAIN_DB="$ANALYSER_GAIN_DB"
@@ -1154,6 +1165,9 @@ load_config_env() {
     SPDIF_FORMAT="${JB_SPDIF_FORMAT:-}"
     JACK_LEVEL="${JB_JACK_LEVEL:-0dB}"
     JACK_LEVEL_RAW="${JB_JACK_LEVEL_RAW:-0}"
+    SOFTVOL_MAX_DB="${JB_SOFTVOL_MAX_DB:-0.5}"
+    SOFTVOL_MIN_DB="${JB_SOFTVOL_MIN_DB:--49.5}"
+    SOFTVOL_RESOLUTION="${JB_SOFTVOL_RESOLUTION:-100}"
     ANALYSER_TRIM="${JB_ANALYSER_TRIM:-on}"
     ANALYSER_FREQ_HZ="${JB_ANALYSER_FREQ_HZ:-60}"
     ANALYSER_GAIN_DB="${JB_ANALYSER_GAIN_DB:--6.02}"

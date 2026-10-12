@@ -181,9 +181,9 @@ Which firmware line carries the switch is chosen with `--direct-source`
 (`push`/`power`, default `push`); turn the whole feature off with `--no-direct`.
 When the switch returns to OFF the current pot positions are re-applied.
 
-> The DAC's software volume tops out at −0.5 dB (a softvol limit), so "pure
-> direct" is exact only once that is corrected to a true 0 dB. CamillaDSP's
-> flat pipeline is already exact.
+> The DAC software volume is calibrated so its top value is exactly 0 dB (see
+> the multi-output README), and a flat CamillaDSP pipeline is byte-for-byte
+> transparent, so pure direct really is bit-perfect.
 
 ## Power button (soft power off)
 

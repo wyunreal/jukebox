@@ -186,6 +186,11 @@ volumio -> softvolume -> jukeboxRoute -> jukeboxSplit (multi)
 
 * The software volume (`SoftMaster`) sits **after** the split, on the DAC
   branch only, so both the Volumio UI/API and MPD move the DAC alone.
+* The `softvol` is calibrated so its **top value is exactly 0 dB**, not the
+  usual −0.5 dB a plain −50..0 range gives: `max_dB 0.5`, `min_dB -49.5`,
+  `resolution 100` (`JB_SOFTVOL_MAX_DB` / `JB_SOFTVOL_MIN_DB` /
+  `JB_SOFTVOL_RESOLUTION`). The DAC can then reach true unity gain, which the
+  *pure direct* mode relies on for a bit-perfect path.
 * `jukeboxTone` (the `cdsp` -> CamillaDSP tone step) sits **after** the
   software volume, so the bass/treble shelves act on the DAC signal only.
   Without the tone (`--no-tone`) it is absent and the chain is the original one.
