@@ -1,6 +1,6 @@
 ---
 name: jukebox
-description: Operate and troubleshoot the user's homemade jukebox — a Raspberry Pi 4B running Volumio with a custom multi-output audio chain (I2S DAC speakers, volume-controlled; a fixed-level USB sound card feeding a hardware spectrum analyser; optionally a third fixed-level USB S/PDIF feed) and a DSI touch screen. Use this skill whenever the user mentions "the jukebox", "la jukebox", "el jukebox", "Volumio", "la rocola", the music box, its audio/volume/spectrum analyser/touch screen, its music storage/HDDs (RAID), or asks to connect to it, SSH in, check/fix/change its sound or storage setup, or run the audio installer — even when they don't explicitly say "jukebox".
+description: Operate and troubleshoot the user's homemade jukebox — a Raspberry Pi 4B running Volumio with a custom multi-output audio chain (I2S DAC speakers, volume-controlled; a USB sound card feeding a hardware spectrum analyser whose level a 3-position switch selects; optionally a third fixed-level USB S/PDIF feed) and a DSI touch screen. Use this skill whenever the user mentions "the jukebox", "la jukebox", "el jukebox", "Volumio", "la rocola", the music box, its audio/volume/spectrum analyser/touch screen, its music storage/HDDs (RAID), or asks to connect to it, SSH in, check/fix/change its sound or storage setup, or run the audio installer — even when they don't explicitly say "jukebox".
 ---
 
 # Jukebox (Volumio on Raspberry Pi)
@@ -11,9 +11,11 @@ A homemade jukebox: Raspberry Pi 4B running **Volumio** (Raspbian bookworm,
 kernel 6.12.y) with:
 
 - **I2S DAC** (PCM1794A, ALSA card `sndrpirpidac`) → speakers. Volume-controlled.
-- **Second fixed-level output** for a hardware spectrum analyser. A **USB sound
-  card** (`USB PnP Sound Device`, C-Media `08bb:2902` / PCM2902). Its ALSA card
-  number **and id** are dynamic — always find it by name (long-name match).
+- **Second output** for a hardware spectrum analyser. A **USB sound card**
+  (`USB PnP Sound Device`, C-Media `08bb:2902` / PCM2902). Its ALSA branch has
+  no volume; a **3-position switch** sets the card's own `PCM` playback level
+  (normal / 40 % lower / off) through `jukebox-pots`. Its ALSA card number
+  **and id** are dynamic — always find it by name (long-name match).
 - **Optional third fixed-level output**: a second USB card used as a clean
   **S/PDIF** feed (no volume, no analyser EQ) for an external DAC/receiver. On
   this box it is a `DSD TECH USB Audio Device` (C-Media `0d8c:0247`, exposes
@@ -258,9 +260,11 @@ states above.
   happened once; the USB second output exists because of it. The `hdmi`
   variant is still supported for other setups, but don't enable it here unless
   the user explicitly asks and accepts the touch-screen risk.
-- **The analyser feed must stay at constant level.** All volume control
-  belongs to `SoftMaster` on `sndrpirpidac`. If volume "stops working" on the
-  DAC or starts affecting the second output, run `verify` and confirm
+- **The analyser ALSA branch has no volume; only the 3-position switch changes
+  the analyser level** (on the card's own `PCM` control, via `jukebox-pots`:
+  normal / 40 % lower / off). The volume pot and tone must **not** affect it.
+  If volume "stops working" on the DAC or starts affecting the second output,
+  run `verify` and confirm
   `softvolume=true`, `mixer=SoftMaster`, `mixer_type=Software` in
   `/data/configuration/audio_interface/alsa_controller/config.json`.
 - **Card numbers *and* generic ids change** when devices are added/removed
@@ -332,6 +336,7 @@ states above.
 | Restarting `jukebox-pots` cuts the jukebox power | **DTR reset**: DTR is tied to reset on the Micro (same board runs the power state machine) | the daemon must not assert DTR (it does not); do not use `cat`/tools that raise DTR |
 | Pots do nothing but `jukebox-pots` is active | board not enumerated, wrong port, or `SoftMaster` missing | `sudo /usr/local/jukebox-pots/jukebox-pots.py --probe`; `journalctl -u jukebox-pots` |
 | Tone pots do nothing | tone off (`JB_TONE`), no CamillaDSP config, or the daemon can't write it | check `ls /usr/local/jukebox-audio/cdsp/`; `journalctl -u jukebox-pots \| grep tone`; reinstall `jukebox-audio` with tone on |
+| Spectrum switch does nothing | analyser card absent/mismatched, or `JP_SPECTRUM=0` | `jukebox-pots.py --probe` (shows the spectrum card/control); `journalctl -u jukebox-pots \| grep spectrum`; check `JP_SPECTRUM_CARD_MATCH` matches the analyser card's long name |
 | No sound after installing the tone | CamillaDSP `chunksize` too large for the cdsp pipe (deadlock, XRUN) | keep `chunksize: 512` in the tone template; `apply`; reinstall |
 | Power button short press does nothing | `JP_POWER_BUTTON=0` (disabled), or firmware not reflashed | install `jukebox-pots` without `--no-power-button`; reflash the PowerAndPots Arduino; check `journalctl -u jukebox-pots` |
 | Pi shuts down but the relay never cuts | firmware without the `POWER: off` command, or serial port dead at shutdown | reflash the Arduino; the cut is Arduino-side (`POWER_OFF_DELAY_MS`, default 30 s) |
@@ -360,7 +365,9 @@ states above.
   Arduino over USB serial and drives the DAC volume (Volumio API), balance
   (per-channel `SoftMaster`) and bass/treble (CamillaDSP config + `SIGHUP`, live).
   Install with `software/jukebox-pots/deploy.sh install`; check with `... status`.
-  It only touches the DAC branch, never the analyser feed. It also watches the
+  It drives the DAC branch (volume/balance/tone) and also the analyser card's own
+  `PCM` level from the 3-position `MULTI ROTARY` switch (`OFF`/`SW1`/`SW2` →
+  normal / 40 % lower / off), without modifying the ALSA split. It also watches
   Arduino's `POWER:` lines: a short power-button press halts the Pi and the
   Arduino cuts the relay ~30 s later (delay lives on the board, powered from
   5VSB); the long press stays the immediate hard cut. On by default; disable

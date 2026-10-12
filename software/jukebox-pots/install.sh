@@ -5,8 +5,9 @@
 # Installs a small always-on daemon that reads "POT volume" and "POT balance"
 # from the Arduino's USB serial port and maps them onto the I2S DAC software
 # volume (SoftMaster): the volume pot drives the Volumio volume, the balance
-# pot pans the DAC left/right.  The second, constant-level output that feeds
-# the spectrum analyser is never touched.
+# pot pans the DAC left/right.  A 3-position switch selects the level of the
+# spectrum-analyser output on that card's own hardware control (the ALSA split
+# itself is not modified).
 #
 # The install is idempotent: running it again just re-asserts the same files
 # and restarts the service.
@@ -47,6 +48,23 @@
 #   --power-off-delay N    seconds the Arduino waits before cutting the relay
 #                          (default: 30)
 #   --power-cmd "CMD"      command used to halt the Pi (default: systemctl poweroff)
+#   --spectrum / --no-spectrum
+#                          the 3-position switch selects the spectrum-analyser
+#                          output level (default: on). Position 1 keeps the
+#                          card's usual level, position 2 attenuates it by
+#                          --spectrum-atten-pct, position 3 mutes it
+#   --spectrum-source SRC  firmware line with the switch: rotary|push|tristate
+#                          (default: rotary)
+#   --spectrum-card-match STR
+#                          long-name match of the analyser USB card
+#                          (default: the audio package's JB_USB_CARD_MATCH)
+#   --spectrum-base-db DB  level of switch position 1 (default: -20.13)
+#   --spectrum-atten-pct N attenuation of position 2 in % amplitude (default: 40)
+#   --spectrum-card ID     explicit ALSA card id of the analyser (default: auto)
+#   --spectrum-control NAME playback control on the card (default: PCM)
+#   --spectrum-db-min DB / --spectrum-db-step DB
+#                          card calibration: dB at raw 0 and dB per raw step
+#                          (defaults: -28.37 / 0.1875)
 #
 # Everything that lands on the host lives in files/ (readable, human) and is
 # copied or rendered from there; this script only orchestrates.
@@ -56,7 +74,7 @@
 #
 set -euo pipefail
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 
 APPLY_DIR="/usr/local/jukebox-pots"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -85,6 +103,15 @@ TONE_TREBLE_INVERT="0"
 POWER_BUTTON="1"
 POWER_OFF_DELAY="30"
 POWER_CMD=""
+SPECTRUM_ENABLE="1"
+SPECTRUM_SOURCE="rotary"
+SPECTRUM_CARD=""
+SPECTRUM_CARD_MATCH=""
+SPECTRUM_CONTROL="PCM"
+SPECTRUM_BASE_DB="-20.13"
+SPECTRUM_ATTEN_PCT="40"
+SPECTRUM_DB_MIN="-28.37"
+SPECTRUM_DB_STEP="0.1875"
 
 # ------------------------------------------------------------------- helpers
 
@@ -96,7 +123,7 @@ die()  { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 require_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 $*"; }
 
-usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,74p' "$0" | sed 's/^# \{0,1\}//'; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
@@ -151,7 +178,12 @@ write_config() {
     "TONE_BASS_POT=$TONE_BASS_POT" "TONE_TREBLE_POT=$TONE_TREBLE_POT" \
     "TONE_BASS_INVERT=$TONE_BASS_INVERT" "TONE_TREBLE_INVERT=$TONE_TREBLE_INVERT" \
     "POWER_BUTTON=$POWER_BUTTON" "POWER_OFF_DELAY_S=$POWER_OFF_DELAY" \
-    "POWER_CMD=$POWER_CMD"
+    "POWER_CMD=$POWER_CMD" \
+    "SPECTRUM_ENABLE=$SPECTRUM_ENABLE" "SPECTRUM_SOURCE=$SPECTRUM_SOURCE" \
+    "SPECTRUM_CARD=$SPECTRUM_CARD" "SPECTRUM_CARD_MATCH=$SPECTRUM_CARD_MATCH" \
+    "SPECTRUM_CONTROL=$SPECTRUM_CONTROL" "SPECTRUM_BASE_DB=$SPECTRUM_BASE_DB" \
+    "SPECTRUM_ATTEN_PCT=$SPECTRUM_ATTEN_PCT" \
+    "SPECTRUM_DB_MIN=$SPECTRUM_DB_MIN" "SPECTRUM_DB_STEP=$SPECTRUM_DB_STEP"
 }
 
 install_files() {
@@ -186,12 +218,40 @@ cmd_install() {
   fi
   [ -e "/proc/asound/$DAC_CARD" ] || die "ALSA card '$DAC_CARD' does not exist"
 
+  case "$SPECTRUM_SOURCE" in
+    rotary|push|tristate) ;;
+    *) die "--spectrum-source must be rotary|push|tristate (got: $SPECTRUM_SOURCE)" ;;
+  esac
+  case "$SPECTRUM_ATTEN_PCT" in
+    ''|*[!0-9]*) die "--spectrum-atten-pct must be 0..99 (got: $SPECTRUM_ATTEN_PCT)" ;;
+  esac
+  [ "$SPECTRUM_ATTEN_PCT" -lt 100 ] || die "--spectrum-atten-pct must be 0..99 (got: $SPECTRUM_ATTEN_PCT)"
+
+  # Inherit the analyser card match from the audio package when it is installed
+  # and none was given, so both packages agree on which USB card is the
+  # analyser (two C-Media cards share a generic id). The card *id* is
+  # deliberately not inherited: it is dynamic, so the daemon re-detects by name.
+  if [ "$SPECTRUM_ENABLE" = "1" ] && [ -z "$SPECTRUM_CARD_MATCH" ]; then
+    if [ -r /usr/local/jukebox-audio/config.env ]; then
+      # shellcheck disable=SC1091
+      . /usr/local/jukebox-audio/config.env
+      SPECTRUM_CARD_MATCH="${JB_USB_CARD_MATCH:-}"
+    fi
+    [ -n "$SPECTRUM_CARD_MATCH" ] || SPECTRUM_CARD_MATCH="USB PnP"
+  fi
+
   say "Installing jukebox-pots (v$VERSION)"
   echo "    DAC card     : $DAC_CARD"
   echo "    serial port  : ${PORT:-auto-detect by USB product}"
   echo "    USB product  : $PRODUCT"
   echo "    volume       : pot 0..$POT_MAX -> 0..$VOLUME_MAX$([ "$VOLUME_INVERT" = 1 ] && echo ' (inverted)')"
   echo "    balance      : pot center $BALANCE_CENTER, span $BALANCE_SPAN$([ "$BALANCE_INVERT" = 1 ] && echo ' (inverted)')"
+  if [ "$SPECTRUM_ENABLE" = "1" ]; then
+    echo "    spectrum     : $SPECTRUM_SOURCE switch -> card '${SPECTRUM_CARD_MATCH:-$SPECTRUM_CARD}'"
+    echo "                   position 1 ${SPECTRUM_BASE_DB} dB, position 2 -${SPECTRUM_ATTEN_PCT}% amplitude, position 3 off"
+  else
+    echo "    spectrum     : disabled"
+  fi
   echo "    power button : $([ "$POWER_BUTTON" = 1 ] && echo "halts the Pi (relay off after ${POWER_OFF_DELAY}s)" || echo 'disabled')"
   local platform backend_desc
   platform="$(detect_platform)"
@@ -224,7 +284,9 @@ cmd_install() {
   say "Done"
   cat <<EOF
     The service starts at boot and stays up; it re-scans for the Arduino if it
-    is unplugged. Only the DAC branch is affected — the analyser feed is fixed.
+    is unplugged. The DAC branch carries the volume/balance/tone; the spectrum
+    level is set on the analyser card's own control (the ALSA split is not
+    touched).
 
     * Logs      : journalctl -u jukebox-pots -f
     * Status    : sudo $0 status
@@ -234,7 +296,7 @@ EOF
 
 cmd_verify() {
   require_root
-  local rc=0 port
+  local rc=0 port probe spec
   [ -f "$CONFIG_ENV" ] && . "$CONFIG_ENV" || true
   POWER_BUTTON="${JP_POWER_BUTTON:-$POWER_BUTTON}"
   POWER_OFF_DELAY="${JP_POWER_OFF_DELAY_S:-$POWER_OFF_DELAY}"
@@ -263,7 +325,12 @@ cmd_verify() {
     fail "service is not running"; rc=$((rc + 1))
   fi
 
-  port="$(JP_DAC_CARD="$DAC_CARD" JP_PORT="$PORT" JP_PRODUCT="$PRODUCT" python3 "$APPLY_DIR/jukebox-pots.py" --probe 2>/dev/null | sed -n 's/^serial port   : //p')"
+  probe="$(JP_DAC_CARD="${JP_DAC_CARD:-$DAC_CARD}" JP_PORT="$PORT" JP_PRODUCT="$PRODUCT" \
+           JP_SPECTRUM_CARD="${JP_SPECTRUM_CARD:-}" \
+           JP_SPECTRUM_CARD_MATCH="${JP_SPECTRUM_CARD_MATCH:-}" \
+           JP_SPECTRUM_CONTROL="${JP_SPECTRUM_CONTROL:-}" \
+           python3 "$APPLY_DIR/jukebox-pots.py" --probe 2>/dev/null || true)"
+  port="$(printf '%s\n' "$probe" | sed -n 's/^serial port   : //p')"
   case "$port" in
     ""|"<not found>")
       warn "Arduino serial port not detected right now (plug it in; the service will pick it up)"
@@ -272,6 +339,20 @@ cmd_verify() {
       ok "Arduino serial port: $port"
       ;;
   esac
+
+  if [ "${JP_SPECTRUM:-1}" = "1" ]; then
+    spec="$(printf '%s\n' "$probe" | sed -n 's/^spectrum      : //p')"
+    case "$spec" in
+      ""|no\ card*|unsupported*)
+        warn "spectrum: analyser card '${JP_SPECTRUM_CARD_MATCH:-${JP_SPECTRUM_CARD:-?}}' not found (plug it in; the service will pick it up)"
+        ;;
+      *)
+        ok "spectrum: $spec"
+        ;;
+    esac
+  else
+    warn "spectrum: disabled (--no-spectrum): the switch is ignored"
+  fi
 
   if [ "${TONE_ENABLE:-1}" = "1" ]; then
     local tone_ok=0
@@ -359,6 +440,24 @@ main() {
       --power-off-delay=*) POWER_OFF_DELAY="${1#*=}"; shift ;;
       --power-cmd) POWER_CMD="$2"; shift 2 ;;
       --power-cmd=*) POWER_CMD="${1#*=}"; shift ;;
+      --spectrum) SPECTRUM_ENABLE=1; shift ;;
+      --no-spectrum) SPECTRUM_ENABLE=0; shift ;;
+      --spectrum-source) SPECTRUM_SOURCE="$2"; shift 2 ;;
+      --spectrum-source=*) SPECTRUM_SOURCE="${1#*=}"; shift ;;
+      --spectrum-card) SPECTRUM_CARD="$2"; shift 2 ;;
+      --spectrum-card=*) SPECTRUM_CARD="${1#*=}"; shift ;;
+      --spectrum-card-match) SPECTRUM_CARD_MATCH="$2"; shift 2 ;;
+      --spectrum-card-match=*) SPECTRUM_CARD_MATCH="${1#*=}"; shift ;;
+      --spectrum-control) SPECTRUM_CONTROL="$2"; shift 2 ;;
+      --spectrum-control=*) SPECTRUM_CONTROL="${1#*=}"; shift ;;
+      --spectrum-base-db) SPECTRUM_BASE_DB="$2"; shift 2 ;;
+      --spectrum-base-db=*) SPECTRUM_BASE_DB="${1#*=}"; shift ;;
+      --spectrum-atten-pct) SPECTRUM_ATTEN_PCT="$2"; shift 2 ;;
+      --spectrum-atten-pct=*) SPECTRUM_ATTEN_PCT="${1#*=}"; shift ;;
+      --spectrum-db-min) SPECTRUM_DB_MIN="$2"; shift 2 ;;
+      --spectrum-db-min=*) SPECTRUM_DB_MIN="${1#*=}"; shift ;;
+      --spectrum-db-step) SPECTRUM_DB_STEP="$2"; shift 2 ;;
+      --spectrum-db-step=*) SPECTRUM_DB_STEP="${1#*=}"; shift ;;
       -h|--help) usage; exit 0 ;;
       install|verify|status) mode="$1"; shift ;;
       *) die "unknown argument: $1" ;;

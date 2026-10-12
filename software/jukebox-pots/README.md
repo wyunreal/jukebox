@@ -2,7 +2,8 @@
 
 Turns four potentiometers of the **PowerAndPotsArduino** into physical
 controls **for the speakers (I2S DAC) only**: volume, balance, bass and
-treble.
+treble. A 3-position switch then selects the **level of the spectrum-analyser
+output**.
 
 The Arduino prints their state on its USB serial port (9600 baud, only on
 change):
@@ -14,6 +15,7 @@ POT single: 12 (raw 640)
 POT multi second: 8 (raw 430)
 POT aux: 18 (raw 900)
 POWER switch: ON
+MULTI ROTARY switch: OFF
 ```
 
 The Arduino also reports its power button (`POWER: soft off` on a short press,
@@ -30,6 +32,7 @@ chain, on the **Volumio** box:
 | `POT balance` | 0–20, center 10 | pan of the DAC left/right (opposite channel attenuated) |
 | `POT single` | 0–20, center 10 | **bass** shelf, ±8 dB |
 | `POT multi second` | 0–20, center 10 | **treble** shelf, ±8 dB |
+| `MULTI ROTARY switch` | OFF / SW1 / SW2 | **spectrum level**: normal / attenuated / off |
 
 The two volume pots **multiply**: the volume pot sets the system ceiling and
 the aux pot scales it down. The value sent to the player is
@@ -52,9 +55,11 @@ The pots are not hard-wired to a function: `JP_TONE_BASS_POT` and
 `JP_TONE_TREBLE_POT` pick which firmware lines drive bass and treble
 (`single` / `multisecond` by default).
 
-The **second, constant-level output that feeds the spectrum analyser is never
-touched**: volume lives on the DAC branch only and the tone shelves live on the
-DAC branch only, so nothing in this package can change its level or response.
+The volume, balance and tone all live on the **DAC branch only**, exactly as
+before. The spectrum analyser's level is changed on the analyser card's own
+hardware control (its `PCM` playback volume + mute) — see
+[Spectrum level switch](#spectrum-level-switch) — so the ALSA split is never
+rewritten and the analyser branch itself still has no volume control.
 
 ## How it works
 
@@ -62,7 +67,8 @@ DAC branch only, so nothing in this package can change its level or response.
 PowerAndPotsArduino --USB serial--> jukebox-pots daemon
                                       | volume  -> player volume (DAC branch)
                                       | balance -> DAC pan (per-channel)
-                                      '- tone    -> CamillaDSP config + SIGHUP (live)
+                                      | tone    -> CamillaDSP config + SIGHUP (live)
+                                      '- switch  -> analyser card PCM volume/mute
 ```
 
 The volume path, balance and tone are those of the **Volumio** chain:
@@ -72,6 +78,7 @@ The volume path, balance and tone are those of the **Volumio** chain:
 | Volume | Volumio API (`/api/v1/commands/?cmd=volume`) -> `SoftMaster` |
 | Balance | two channels of `SoftMaster Playback Volume` |
 | Tone | shelves in `/usr/local/jukebox-audio/cdsp/camilla.*.yml` |
+| Spectrum | the analyser USB card's own `PCM` playback control |
 
 * **Volume** goes through Volumio's own volume path, so the UI/API stay in
   sync, and is the product of the volume pot (ceiling) and the aux pot
@@ -84,6 +91,9 @@ The volume path, balance and tone are those of the **Volumio** chain:
   rebuilds the filters **without interrupting playback**. The rewrite finds
   the shelves by their biquad type (`Lowshelf`/`Highshelf`) and preserves the
   file's mode/owner so MPD's `cdsp` plugin can keep rewriting it.
+* **Spectrum** sets the analyser USB card's own `PCM` playback volume (and
+  mute), found by long name so it survives the dynamic card index; the ALSA
+  split is never rewritten. See [Spectrum level switch](#spectrum-level-switch).
 * The daemon has **no third-party dependencies** (no `pyserial`); it opens the
   serial port with `termios` and re-scans for it when missing, so it survives
   the Arduino being unplugged/replugged. A udev rule also restarts it when a
@@ -96,6 +106,50 @@ The volume path, balance and tone are those of the **Volumio** chain:
   seeded.
 * The daemon never asserts DTR (see the clone notes above); the firmware reports
   regardless of it, and the status request is a plain byte.
+
+## Spectrum level switch
+
+The 3-position switch selects the level of the **spectrum-analyser output**. It
+is applied on the analyser USB card's own hardware playback control (its `PCM`
+volume + mute), so the constant-level ALSA branch is not rewritten and the
+speakers are never affected:
+
+| Position | Firmware report | Spectrum output |
+| --- | --- | --- |
+| 1 | `OFF` | the card's usual level (`JP_SPECTRUM_BASE_DB`, default −20.13 dB) |
+| 2 | `SW1` | that level attenuated by `JP_SPECTRUM_ATTEN_PCT` (default 40 % amplitude = −4.4 dB) |
+| 3 | `SW2` | muted (volume 0 + mute) |
+
+"40 % more attenuated" is amplitude: position 2 multiplies the level by
+`1 − pct/100` (`40 → ×0.6`). The card control is linear in dB (raw 0 ==
+`JP_SPECTRUM_DB_MIN`, `JP_SPECTRUM_DB_STEP` dB per step), so the target is
+converted exactly. Turn the whole thing off with `--no-spectrum`; choose which
+firmware line carries the switch with `--spectrum-source`
+(`rotary`/`push`/`tristate`, default `rotary`).
+
+The analyser card is found by **long name** (`--spectrum-card-match`, by default
+inherited from the audio package's `JB_USB_CARD_MATCH`), never by its card
+index, so the two C-Media cards sharing a generic id is not a problem. If the
+card is unplugged the daemon leaves the level alone (the chain runs DAC-only
+anyway) and re-applies it when the card returns; it also re-asserts the level
+if the card resets it. The mapping between the firmware labels and the three
+levels lives in `SPECTRUM_SWITCHES` in the daemon, so a different position order
+is a one-line change.
+
+Identify the switch positions with the raw serial monitor (stop the service
+first — only one reader gets each line off the tty):
+
+```sh
+sudo systemctl stop jukebox-pots
+sudo /usr/local/jukebox-pots/jukebox-pots.py --watch   # move the switch, read the line
+sudo systemctl start jukebox-pots
+```
+
+Force a level without the switch (handy to check the attenuation by ear/eye):
+
+```sh
+sudo /usr/local/jukebox-pots/jukebox-pots.py --spectrum 2   # 1 normal, 2 attenuated, 3 off
+```
 
 ## Power button (soft power off)
 
@@ -271,6 +325,15 @@ is running. The firmware streams regardless of DTR, so plain `termios` suffices.
 | `--tone-treble-pot NAME` | multisecond | firmware line driving treble |
 | `--tone-bass-invert` | off | reverse the bass pot direction |
 | `--tone-treble-invert` | off | reverse the treble pot direction |
+| `--spectrum` / `--no-spectrum` | on | enable/disable the spectrum level switch |
+| `--spectrum-source SRC` | rotary | firmware line with the 3-position switch (`rotary`/`push`/`tristate`) |
+| `--spectrum-card-match STR` | audio pkg | long-name match of the analyser USB card |
+| `--spectrum-card ID` | auto | explicit ALSA card id of the analyser |
+| `--spectrum-control NAME` | PCM | hardware playback control on that card |
+| `--spectrum-base-db DB` | −20.13 | level of switch position 1 |
+| `--spectrum-atten-pct N` | 40 | attenuation of position 2 (% amplitude) |
+| `--spectrum-db-min DB` | −28.37 | card calibration: dB at raw 0 |
+| `--spectrum-db-step DB` | 0.1875 | card calibration: dB per raw step |
 | `--power-button` / `--no-power-button` | on | short power-button press halts the Pi |
 | `--power-off-delay N` | 30 | seconds the Arduino waits before cutting the relay |
 | `--power-cmd CMD` | `systemctl poweroff` | command used to halt the Pi |
@@ -297,7 +360,11 @@ The same values can be set as environment variables in
   reports regardless of it, and the status request is a plain byte.
 * Uninstall removes the service, the unit, the udev rule and
   `/usr/local/jukebox-pots/`, and restores nothing else — the audio chain was
-  never modified by this package.
+  never modified by this package. The spectrum level is set on the analyser
+  card itself, so it keeps its last value after an uninstall.
+* The spectrum switch does not depend on the audio package being present: it
+  only needs the analyser card. The default card match is inherited from
+  `/usr/local/jukebox-audio/config.env` at install time when available.
 
 ## Layout
 

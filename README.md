@@ -82,11 +82,12 @@ skills/jukebox/SKILL.md         # agent skill to operate and troubleshoot the bo
 ```
 
 The audio setup splits playback into the I2S DAC (speakers, volume-controlled
-by Volumio) and a second constant-level output feeding a hardware spectrum
-analyser, with an automatic DAC-only fallback when the second device is absent.
-The DAC branch also carries a live **bass/treble tone control** (CamillaDSP),
-driven by two of the Arduino's potentiometers — see
-[Installing from scratch](#installing-from-scratch).
+by Volumio) and a second output feeding a hardware spectrum analyser, with an
+automatic DAC-only fallback when the second device is absent. That analyser
+branch has no ALSA volume; a 3-position switch instead picks the analyser card's
+own hardware level (normal / lower / off). The DAC branch also carries a live
+**bass/treble tone control** (CamillaDSP), driven by two of the Arduino's
+potentiometers — see [Installing from scratch](#installing-from-scratch).
 
 ## Physical controls
 
@@ -99,8 +100,9 @@ Four potentiometers of the PowerAndPots Arduino drive the DAC (speakers) only:
 | `POT single` | bass shelf (±8 dB, center = flat) |
 | `POT multi second` | treble shelf (±8 dB, center = flat) |
 
-The spectrum analyser feed keeps its constant level and is not affected by any
-of them (including the tone). See
+A 3-position switch selects the **spectrum-analyser** level on that card's own
+hardware control: normal (the card's usual level), 40 % lower, or off. The
+volume, balance and tone pots never affect the analyser feed. See
 [software/jukebox-pots/README.md](software/jukebox-pots/README.md).
 
 ## Firmware

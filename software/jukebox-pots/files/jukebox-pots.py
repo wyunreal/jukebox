@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import os
 import re
 import select
@@ -60,6 +61,13 @@ def _env(name: str, default: str) -> str:
 def _env_int(name: str, default: int) -> int:
     try:
         return int(_env(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(_env(name, str(default)))
     except ValueError:
         return default
 
@@ -149,6 +157,46 @@ POWER_CMD = _env("JP_POWER_CMD", "").split()          # override, e.g. "shutdown
 POWER_OFF_DELAY_S = _env_int("JP_POWER_OFF_DELAY_S", 30)
 POWER_RE = re.compile(r"^POWER:\s*soft off\b")
 
+# --- spectrum (analyser) output level switch --------------------------------
+# A 3-position switch on the PowerAndPots board selects the level of the
+# spectrum-analyser output (the second, constant-level branch of the audio
+# chain). The level is applied on the analyser USB card's own hardware 'PCM'
+# playback volume/mute, so the ALSA split is never modified: the branch still
+# has no software volume and the DAC branch is untouched.
+#
+#   level 1 (normal)      : the card's usual level (JP_SPECTRUM_BASE_DB)
+#   level 2 (attenuated)  : that level attenuated by JP_SPECTRUM_ATTEN_PCT
+#                           (percent of amplitude, so 40 -> x0.6 = -4.4 dB)
+#   level 3 (off)         : muted (and volume at 0)
+#
+# The card is found by its long name (the same match jukebox-audio uses for the
+# analyser branch), never by its dynamic card index; a missing card is not an
+# error (the chain may be running DAC-only). The card control is close to
+# linear in dB; JP_SPECTRUM_DB_MIN is the dB at raw 0 and JP_SPECTRUM_DB_STEP
+# the dB per raw step (the USB Audio class default here: 0.1875 dB).
+SPECTRUM_ENABLE = _env_bool("JP_SPECTRUM", True)
+# Which firmware line carries the 3-position switch (rotary|push|tristate).
+SPECTRUM_SOURCE = _env("JP_SPECTRUM_SOURCE", "rotary")
+SPECTRUM_CARD = _env("JP_SPECTRUM_CARD", "")            # explicit ALSA card id
+SPECTRUM_CARD_MATCH = _env("JP_SPECTRUM_CARD_MATCH", "USB PnP")
+SPECTRUM_CONTROL = _env("JP_SPECTRUM_CONTROL", "PCM")
+SPECTRUM_BASE_DB = _env_float("JP_SPECTRUM_BASE_DB", -20.13)
+SPECTRUM_ATTEN_PCT = _env_int("JP_SPECTRUM_ATTEN_PCT", 40)
+SPECTRUM_DB_MIN = _env_float("JP_SPECTRUM_DB_MIN", -28.37)
+SPECTRUM_DB_STEP = _env_float("JP_SPECTRUM_DB_STEP", 0.1875) or 1.0
+# Re-read the card control at most this often when the switch has not moved, to
+# re-assert the level if the card resets its own mixer (the value survives a
+# chain reopen here, so this is only cheap insurance).
+SPECTRUM_CHECK_MS = 2000
+
+# Firmware line + label order per switch source; the label maps to the spectrum
+# level (1 normal, 2 attenuated, 3 off). "push" is only two positions.
+SPECTRUM_SWITCHES = {
+    "rotary":   (r"^MULTI ROTARY switch:\s*(\S+)", {"OFF": 1, "SW1": 2, "SW2": 3}),
+    "push":     (r"^MULTI PUSH switch:\s*(\S+)",   {"OFF": 1, "ON": 2}),
+    "tristate": (r"^POWER tristate:\s*(\S+)",      {"CENTER": 1, "LEFT": 2, "RIGHT": 3}),
+}
+
 
 def log(msg: str) -> None:
     print("%s %s" % (time.strftime("%Y-%m-%dT%H:%M:%S"), msg), flush=True)
@@ -201,6 +249,12 @@ def map_tone(pot: int, center: int = TONE_POT_CENTER, span: int = TONE_POT_SPAN,
     if invert:
         g = -g
     return float(clamp(g, -max_db, max_db))
+
+
+def db_to_raw(db: float, db_min: float = SPECTRUM_DB_MIN,
+              db_step: float = SPECTRUM_DB_STEP) -> int:
+    """A target level in dB -> raw hardware value (raw 0 == db_min)."""
+    return int(round((db - db_min) / db_step))
 
 
 # -------------------------------------------------------------------- serial
@@ -334,14 +388,17 @@ def find_port() -> str | None:
 # ---------------------------------------------------------------------- ALSA
 
 
-def amixer(args: list[str], quiet: bool = False) -> subprocess.CompletedProcess | None:
+def amixer(args: list[str], quiet: bool = False,
+           card: str | None = None) -> subprocess.CompletedProcess | None:
     # Writes pass quiet=True. Reads do not: on the Pi, "amixer -q sget" returns
     # an empty stdout, so the query helpers below would never see the values.
+    # card=None means the DAC card (the default target); pass "" for no -c.
     cmd = ["amixer"]
     if quiet:
         cmd.append("-q")
-    if DAC_CARD:
-        cmd += ["-c", DAC_CARD]
+    target = DAC_CARD if card is None else card
+    if target:
+        cmd += ["-c", target]
     try:
         return subprocess.run(cmd + args, capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
@@ -532,6 +589,119 @@ class ToneControl:
         log("tone bass %+.1f dB / treble %+.1f dB" % (self.bass_db, self.treble_db))
 
 
+# ------------------------------------------------------------------ spectrum
+
+
+class SpectrumControl:
+    """Drive the analyser (spectrum) output level from the 3-position switch.
+
+    The level lives on the analyser USB card's hardware 'PCM' playback volume
+    (with its mute switch), so the constant-level ALSA branch is never modified.
+    The card is re-detected by long name each time, so a dynamic card index
+    (the kernel renumbers C-Media cards on replug) is not a problem, and a
+    missing card is simply skipped.
+    """
+
+    def __init__(self) -> None:
+        self.level: int | None = None
+        self.warned = False
+        self.dirty = True
+        self.next_check = 0.0
+        self._re = re.compile(SPECTRUM_SWITCHES[SPECTRUM_SOURCE][0]) \
+            if SPECTRUM_SOURCE in SPECTRUM_SWITCHES else None
+        self._labels = SPECTRUM_SWITCHES.get(SPECTRUM_SOURCE, (None, {}))[1]
+
+    def feed(self, line: str) -> None:
+        if not SPECTRUM_ENABLE or self._re is None:
+            return
+        m = self._re.match(line)
+        if m:
+            level = self._labels.get(m.group(1).upper())
+            if level is not None and level != self.level:
+                self.level = level
+                self.dirty = True
+                log("spectrum switch %s -> level %d" % (m.group(1).upper(), level))
+
+    def _find_card(self) -> str | None:
+        # An explicit card id wins when it exists, but the ids are dynamic (the
+        # kernel renumbers the C-Media cards on replug), so fall back to
+        # re-detecting by long name instead of giving up.
+        if SPECTRUM_CARD and os.path.exists("/proc/asound/%s" % SPECTRUM_CARD):
+            return SPECTRUM_CARD
+        want = SPECTRUM_CARD_MATCH.strip().lower()
+        if not want:
+            return None
+        try:
+            text = open("/proc/asound/cards").read()
+        except OSError:
+            return None
+        #  4 [Device_1       ]: USB-Audio - USB PnP Sound Device
+        for m in re.finditer(r"^\s*\d+\s*\[(\S+)\s*\]\s*:\s*(.*)$", text, re.M):
+            if want in m.group(2).lower():
+                return m.group(1)
+        return None
+
+    def _read(self, card: str) -> tuple[int, int, int, bool] | None:
+        """Return (rawmin, rawmax, raw, unmuted) of the control, or None."""
+        proc = amixer(["sget", SPECTRUM_CONTROL], card=card)
+        if not proc or proc.returncode != 0:
+            return None
+        lim = re.search(r"Limits:\s*Playback\s+(\d+)\s*-\s*(\d+)", proc.stdout)
+        val = re.search(r"Front Left:\s*Playback\s+(\d+)\b.*\[(on|off)\]", proc.stdout)
+        if not lim or not val:
+            return None
+        return int(lim.group(1)), int(lim.group(2)), int(val.group(1)), val.group(2) == "on"
+
+    def _write(self, card: str, raw: int, unmuted: bool) -> bool:
+        okv = amixer(["sset", SPECTRUM_CONTROL, "%d,%d" % (raw, raw)], quiet=True, card=card)
+        oks = amixer(["sset", SPECTRUM_CONTROL, "unmute" if unmuted else "mute"],
+                     quiet=True, card=card)
+        return bool(okv and okv.returncode == 0 and oks and oks.returncode == 0)
+
+    def _target(self, rawmin: int, rawmax: int) -> tuple[int, bool]:
+        if self.level == 3:
+            return rawmin, False
+        db = SPECTRUM_BASE_DB
+        if self.level == 2:
+            factor = max(1e-6, 1.0 - SPECTRUM_ATTEN_PCT / 100.0)
+            db += 20.0 * math.log10(factor)
+        raw = db_to_raw(db)
+        return int(clamp(raw, rawmin, rawmax)), True
+
+    def apply(self) -> None:
+        if not SPECTRUM_ENABLE or self.level is None:
+            return
+        # Re-assert at most every SPECTRUM_CHECK_MS, but at once on a change.
+        now = time.monotonic()
+        if not self.dirty and now < self.next_check:
+            return
+        self.next_check = now + SPECTRUM_CHECK_MS / 1000.0
+        card = self._find_card()
+        if card is None:
+            if not self.warned:
+                log("spectrum: no card matching %r (analyser not plugged?)"
+                    % (SPECTRUM_CARD or SPECTRUM_CARD_MATCH))
+                self.warned = True
+            return
+        state = self._read(card)
+        if state is None:
+            if not self.warned:
+                log("spectrum: control %r not found on card %s"
+                    % (SPECTRUM_CONTROL, card))
+                self.warned = True
+            return
+        self.warned = False
+        rawmin, rawmax, raw, unmuted = state
+        want_raw, want_unmute = self._target(rawmin, rawmax)
+        if (raw, unmuted) == (want_raw, want_unmute):
+            self.dirty = False
+            return
+        if self._write(card, want_raw, want_unmute):
+            self.dirty = False
+            log("spectrum level %d -> raw %d (%s) on %s"
+                % (self.level, want_raw, "unmuted" if want_unmute else "muted", card))
+
+
 # ----------------------------------------------------------------- controller
 
 
@@ -546,6 +716,7 @@ class Controller:
         self.warned_missing = False
         self.next_ensure = 0.0
         self.tone = ToneControl()
+        self.spectrum = SpectrumControl()
         self.poweroff_handled = False
 
     def request_poweroff(self, fd: int) -> None:
@@ -602,6 +773,7 @@ class Controller:
             if m:
                 self.tone.pot_feed(name, int(m.group(1)))
                 return
+        self.spectrum.feed(line)
 
     def apply_volume(self) -> None:
         if self.pot_volume is None or not self.volume_dirty:
@@ -650,6 +822,7 @@ class Controller:
         self.apply_volume()
         self.apply_balance()
         self.tone.apply()
+        self.spectrum.apply()
 
 
 # ---------------------------------------------------------------------- probe
@@ -667,6 +840,22 @@ def probe() -> int:
     for path in sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*")):
         print("candidate     : %s -> %s" % (path, _usb_product(path) or "<unknown product>"))
     print("SoftMaster    : %s" % (read_softmaster(),))
+    spec = SpectrumControl()
+    scard = spec._find_card()
+    if spec._re is None:
+        print("spectrum      : unsupported switch source %r" % SPECTRUM_SOURCE)
+    elif not SPECTRUM_ENABLE:
+        print("spectrum      : disabled")
+    elif scard is None:
+        print("spectrum      : no card matching %r" % (SPECTRUM_CARD or SPECTRUM_CARD_MATCH))
+    else:
+        st = spec._read(scard)
+        if st:
+            rawmin, rawmax, raw, unmuted = st
+            print("spectrum      : card %s control %r raw %d/%d %s"
+                  % (scard, SPECTRUM_CONTROL, raw, rawmax, "unmuted" if unmuted else "muted"))
+        else:
+            print("spectrum      : card %s has no control %r" % (scard, SPECTRUM_CONTROL))
     print("power button  : %s (delay %ds)" % (
         "enabled" if POWER_BUTTON else "disabled", POWER_OFF_DELAY_S))
     if port:
@@ -681,7 +870,8 @@ def probe() -> int:
         while time.monotonic() < deadline and len(seen) < 4:
             lines, alive = read_lines(fd, 0.3)
             for line in lines:
-                if VOLUMIO_RE.match(line) or BALANCE_RE.match(line) or AUX_RE.match(line):
+                if VOLUMIO_RE.match(line) or BALANCE_RE.match(line) or AUX_RE.match(line) \
+                   or (spec._re and spec._re.match(line)):
                     seen.append(line)
             if not alive:
                 break
@@ -689,6 +879,49 @@ def probe() -> int:
         print("serial read   : %s" % (seen if seen else "<no POT lines seen>"))
         return 0
     return 1
+
+
+def watch() -> int:
+    """Print every line the PowerAndPots firmware sends (identify pots/switches).
+
+    Uses the same DTR-free termios open as the daemon, so it never resets the
+    board (and thus the power relay). Stop the jukebox-pots service first: only
+    one reader gets each line off the tty.
+    """
+    log("watching the PowerAndPots serial port (Ctrl-C to stop)")
+    fd: int | None = None
+    port = ""
+    try:
+        while True:
+            if fd is None:
+                port = find_port() or ""
+                if not port:
+                    log("waiting for the PowerAndPots Arduino...")
+                    time.sleep(RESCAN_MS / 1000.0)
+                    continue
+                try:
+                    fd = open_serial(port)
+                except OSError as exc:
+                    log("cannot open %s: %s" % (port, exc))
+                    port = ""
+                    time.sleep(RESCAN_MS / 1000.0)
+                    continue
+                request_status(fd)
+                log("connected to %s (status requested)" % port)
+            lines, alive = read_lines(fd, 0.5)
+            for line in lines:
+                print(line, flush=True)
+            if not alive:
+                log("lost %s (unplugged?)" % port)
+                os.close(fd)
+                fd = None
+                port = ""
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if fd is not None:
+            os.close(fd)
+    return 0
 
 
 def selftest() -> int:
@@ -706,6 +939,16 @@ def selftest() -> int:
     assert POWER_RE.match("POWER: soft off")
     assert not POWER_RE.match("POWER: hard off")
     assert not POWER_RE.match("POWER: ON")
+    # spectrum: the analyser control is linear in dB with raw 0 at db_min.
+    assert db_to_raw(-28.37, -28.37, 0.1875) == 0
+    assert db_to_raw(-20.13, -28.37, 0.1875) == 44
+    assert db_to_raw(-24.57, -28.37, 0.1875) == 20         # -40% amplitude
+    assert SPECTRUM_SWITCHES["rotary"][1]["SW2"] == 3
+    assert SPECTRUM_SWITCHES["push"][1]["ON"] == 2
+    if SPECTRUM_SOURCE == "rotary":
+        spec = SpectrumControl()
+        spec.feed("MULTI ROTARY switch: SW1")
+        assert spec.level == 2
     print("selftest ok")
     return 0
 
@@ -724,12 +967,26 @@ def main() -> int:
     parser.add_argument("--poweroff-test", action="store_true",
                         help="show the power-off sequence (Arduino message + halt "
                              "command) and exit, without touching the Arduino")
+    parser.add_argument("--watch", action="store_true",
+                        help="print every serial line from the Arduino (to identify "
+                             "a pot/switch); stop the jukebox-pots service first")
+    parser.add_argument("--spectrum", type=int, metavar="LEVEL", choices=(1, 2, 3),
+                        help="force the spectrum output level (1 normal, 2 attenuated, "
+                             "3 off) on the analyser card and exit")
     args = parser.parse_args()
 
     if args.selftest:
         return selftest()
     if args.probe:
         return probe()
+    if args.watch:
+        return watch()
+    if args.spectrum:
+        spec = SpectrumControl()
+        spec.level = args.spectrum
+        spec.apply()
+        print("spectrum level %d -> card %s" % (args.spectrum, spec._find_card()))
+        return 0
     if args.poweroff_test:
         print("power button : %s" % ("enabled (JP_POWER_BUTTON=1)" if POWER_BUTTON
                                      else "disabled (JP_POWER_BUTTON=0)"))
