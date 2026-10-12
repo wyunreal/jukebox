@@ -1,6 +1,6 @@
 ---
 name: jukebox
-description: Operate and troubleshoot the user's homemade jukebox — a Raspberry Pi 4B running Volumio with a custom dual audio output (I2S DAC speakers, volume-controlled; a second fixed-level output, currently a USB sound card, feeding a hardware spectrum analyser) and a DSI touch screen. Use this skill whenever the user mentions "the jukebox", "la jukebox", "el jukebox", "Volumio", "la rocola", the music box, its audio/volume/spectrum analyser/touch screen, its music storage/HDDs (RAID), or asks to connect to it, SSH in, check/fix/change its sound or storage setup, or run the audio installer — even when they don't explicitly say "jukebox".
+description: Operate and troubleshoot the user's homemade jukebox — a Raspberry Pi 4B running Volumio with a custom multi-output audio chain (I2S DAC speakers, volume-controlled; a fixed-level USB sound card feeding a hardware spectrum analyser; optionally a third fixed-level USB S/PDIF feed) and a DSI touch screen. Use this skill whenever the user mentions "the jukebox", "la jukebox", "el jukebox", "Volumio", "la rocola", the music box, its audio/volume/spectrum analyser/touch screen, its music storage/HDDs (RAID), or asks to connect to it, SSH in, check/fix/change its sound or storage setup, or run the audio installer — even when they don't explicitly say "jukebox".
 ---
 
 # Jukebox (Volumio on Raspberry Pi)
@@ -11,9 +11,17 @@ A homemade jukebox: Raspberry Pi 4B running **Volumio** (Raspbian bookworm,
 kernel 6.12.y) with:
 
 - **I2S DAC** (PCM1794A, ALSA card `sndrpirpidac`) → speakers. Volume-controlled.
-- **Second fixed-level output** for a hardware spectrum analyser. Currently a
-  **USB sound card** (`USB PnP Sound Device`, PCM2902). Its ALSA card number is
-  dynamic — always find it by name.
+- **Second fixed-level output** for a hardware spectrum analyser. A **USB sound
+  card** (`USB PnP Sound Device`, C-Media `08bb:2902` / PCM2902). Its ALSA card
+  number **and id** are dynamic — always find it by name (long-name match).
+- **Optional third fixed-level output**: a second USB card used as a clean
+  **S/PDIF** feed (no volume, no analyser EQ) for an external DAC/receiver. On
+  this box it is a `DSD TECH USB Audio Device` (C-Media `0d8c:0247`, exposes
+  `iec958`; PCM 16/24-bit, 44.1–96 kHz; **no** native DSD over ALSA). Wired only
+  with `--third-output spdif` (variant `usbspdif`). Its id is also dynamic.
+  **It must be plugged into a different USB hub than the analyser card** (on this
+  box: DSD TECH in a Pi port `1-1.1`, USB PnP on the hub `1-1.2.2`); see the
+  golden rules — two full-speed USB audio cards on one single-TT hub break.
 - **DSI touch screen** (plugin `touch_display`, `volumio-kiosk.service`,
   Xorg on :0).
 - The 3.5 mm jack and both HDMI outputs exist but are **not** in use.
@@ -23,9 +31,9 @@ kernel 6.12.y) with:
 
 The audio chain is custom ("jukebox-audio"): an ALSA `multi` split where the
 software volume (`SoftMaster`) sits only on the DAC branch, so the Volumio
-volume slider moves the speakers and never the analyser feed. MPD's own mixer
-is disabled (`mixer_type "none"`) — `mpc volume` answering "No mixer" is
-**expected**, not a bug. Control volume through Volumio (UI or API).
+volume slider moves the speakers and never the analyser (or S/PDIF) feed. MPD's
+own mixer is disabled (`mixer_type "none"`) — `mpc volume` answering "No mixer"
+is **expected**, not a bug. Control volume through Volumio (UI or API).
 
 ## Connecting
 
@@ -81,15 +89,17 @@ software/jukebox-keyboard/deploy.sh -H volumio@<host> install --key-action next 
 |---|---|---|
 | Services | `systemctl is-active volumio mpd volumio-kiosk` | all `active` |
 | Volumio API | `curl -s localhost:3000/api/v1/getState` | JSON with `status`, `volume` |
-| Live variant | `grep variant /etc/asound.conf` | `# jukebox-audio variant: usb` |
+| Live variant | `grep variant /etc/asound.conf` | `# jukebox-audio variant: usb` (or `usbspdif` with the 3rd branch) |
 | Volume control | `amixer -c sndrpirpidac sget SoftMaster` | readable 0–99 control |
+| USB pins | `sudo /usr/local/jukebox-audio/jukebox-audio.sh status` | `usb card: present (Device_1 … USB PnP Sound Device)`; with 3rd branch also `spdif card: present (Device … DSD TECH…)` |
+| All branches up | `mpc play; sleep 5` then `/proc/asound/card*/pcm0p/sub0/status` | `sndrpirpidac` RUNNING and each USB card RUNNING |
 | Guard units | `systemctl is-enabled jukebox-audio-guard.service jukebox-audio-guard.path` | both `enabled` |
 | Pot service | `systemctl is-active jukebox-pots` | `active` (if installed) |
 | Keyboard service | `systemctl is-active jukebox-keyboard` | `active` (if installed) |
 | Pot port | `ls /dev/ttyACM*` | the PowerAndPots/Keyboard Arduino (if plugged) |
 | Tone engine | `systemctl is-active jukebox-pots` + `pgrep -x camilladsp` | service active; CamillaDSP runs only while playing |
 | Tone config | `ls /usr/local/jukebox-audio/cdsp/camilla.*.yml` | one template per variant (`0644`) |
-| Tool | `sudo /usr/local/jukebox-audio/jukebox-audio.sh status` | `second output: usb`, `live variant: usb` |
+| Tool | `sudo /usr/local/jukebox-audio/jukebox-audio.sh status` | `second output: usb`, `live variant: usb` or `usbspdif` |
 | UI boost | `sudo /usr/local/jukebox-ui/jukebox-ui.sh verify` | all `ok`, X screen `800x480` |
 | UI guard | `systemctl is-active jukebox-ui-guard.path` | `active` |
 | Pot overlay | `systemctl is-active jukebox-overlay.service` | `active` (port 3210) |
@@ -116,6 +126,22 @@ sudo /usr/local/jukebox-audio/jukebox-audio.sh apply      # re-assert current co
 sudo /usr/local/jukebox-audio/jukebox-audio.sh install --second-output usb|hdmi|jack|none
 sudo /usr/local/jukebox-audio/jukebox-audio.sh uninstall  # restore the pre-install backup
 ```
+
+**Pinning the USB cards (this box has two).** The kernel hands generic ids
+(`Device`, `Device_1`) to C-Media cards and reorders them when one is added or
+removed, so every USB branch is pinned by name **and** a long-name substring:
+
+```sh
+# analyser feed -> the old USB PnP card; S/PDIF feed -> the DSD TECH card
+sudo /usr/local/jukebox-audio/jukebox-audio.sh install --second-output usb \
+     --usb-card-match "USB PnP" \
+     --third-output spdif --spdif-card-match "DSD TECH"
+```
+
+`detect_usb_card`/`detect_spdif_card` re-find the card by long name if the id
+changes, and fall back to `usb`/`daconly` — never mix the two USB cards — when
+one is unplugged. `status` prints each card's long name. To drop the third
+branch: reinstall with `--third-output none`.
 
 **Analyser bass trim.** The analyser (second) branch carries a fixed low-shelf
 filter so the spectrum analyser's hardware bass over-read is compensated. It is
@@ -208,13 +234,13 @@ password, connect as guest. Put music in the **`USB`** share's `Music/` folder
 After copying, rescan with `mpc update` (Volumio's REST API has **no**
 `updateLibrary`/`rescan` command; the UI button uses MPD's socket).
 
-**Check that both outputs are really playing:**
+**Check that every output is really playing:**
 ```sh
 mpc play; sleep 5
 for c in $(awk '/^ *[0-9]+ \[/ {print $1}' /proc/asound/cards); do
   echo "card$c: $(head -1 /proc/asound/card$c/pcm0p/sub0/status 2>/dev/null)"
 done
-# expect: sndrpirpidac RUNNING AND the USB card RUNNING
+# expect: sndrpirpidac RUNNING AND each USB card RUNNING (analyser + S/PDIF)
 ```
 
 **Quick silent chain test (opens both branches, no UI interaction):**
@@ -237,9 +263,27 @@ states above.
   DAC or starts affecting the second output, run `verify` and confirm
   `softvolume=true`, `mixer=SoftMaster`, `mixer_type=Software` in
   `/data/configuration/audio_interface/alsa_controller/config.json`.
-- **Card numbers change** when devices are added/removed (boot order, USB
-  hotplug). Everything is wired by *name* (`hw:CARD=...`, `/proc/asound/<name>`).
-  Don't "fix" anything by writing numeric card indices into configs.
+- **Card numbers *and* generic ids change** when devices are added/removed
+  (boot order, USB hotplug). Everything is wired by *name* (`hw:CARD=...`,
+  `/proc/asound/<name>`). Don't "fix" anything by writing numeric card indices
+  into configs.
+- **Two USB cards share generic ids.** Adding one card can make the kernel
+  rename the other (`Device` <-> `Device_1`). Always pin each USB branch by name
+  **and** long-name match (`--usb-card-match` / `--spdif-card-match`); otherwise
+  a new card silently steals a branch and the all-or-nothing `multi` split can
+  take the whole chain down.
+- **Two full-speed USB audio cards must NOT share a USB hub.** The Pi 4's VL805
+  controller + a *single-TT* hub cannot run two full-speed isochronous streams
+  at once: with both cards open the controller **disables an endpoint**
+  (`xhci_hcd: ERROR Transfer event for disabled endpoint`) and the second card
+  goes silent — even though each card works fine alone. Fix: put them on
+  **different hubs / Transaction Translators**, e.g. **one directly in a Pi USB
+  port and the other on the external hub**. Plugging *both* into the Pi does NOT
+  help (the Pi's built-in hub is single-TT too). Check with `lsusb -t`: the two
+  `Class=Audio ... 12M` entries must sit under **different** `Hub` nodes. This is
+  the exact setup on this box (DSD TECH on `1-1.1`, USB PnP on `1-1.2.2`). It is
+  a documented Pi4 limitation, not a config bug
+  (raspberrypi/linux#3962).
 - **`mpc volume` doesn't work on purpose** (MPD mixer disabled). Don't
   "repair" that by re-enabling MPD's mixer — it would let MPD touch the jack /
   second output control.
@@ -276,7 +320,11 @@ states above.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | No sound at all | chain broken, or second device vanished mid-session | `status`; if variant `daconly`, replug USB; then `apply` |
+| No sound after plugging a new USB card | kernel renamed the cards; the branch points at the new one | `sudo jukebox-audio.sh status`; reinstall pinning both: `--usb-card-match "USB PnP"` (+ `--spdif-card-match "DSD TECH"` if used) |
 | Speakers fine, no analyser feed | USB card absent or variant `daconly` | replug, wait ~10 s (udev), else `install --second-output usb` |
+| Analyser works but no S/PDIF | third branch off, or S/PDIF card absent/mismatched | `status` shows `third output: spdif` + `spdif card`; reinstall with `--third-output spdif --spdif-card-match "..."` |
+| S/PDIF **coax** plays only ONE channel (or distorted) | in the case seen here it was the **downstream DAC/receiver**, NOT the USB card | before blaming the USB→S/PDIF adapter, test its coax into a **known-good** receiver (a Denon AV amp worked fine); the adapter's analog output is a second check. The chain itself is fine (loopback capture of branch 3 is clean stereo). Only RMA the adapter if it fails into a known-good receiver too. |
+| One of two USB sound cards is silent (each works alone; `dmesg` shows `xhci: ERROR Transfer event for disabled endpoint`) | the two full-speed cards share one single-TT hub; the VL805 disables an endpoint | move them onto **different USB hubs** (one direct in a Pi port, one on the external hub), then replug; check `lsusb -t` — both audio cards must be under different `Hub` nodes |
 | Volumio volume slider does nothing | `SoftMaster` element lost | `systemctl restart alsa-restore`; `apply` |
 | Volume affects the analyser too | wrong variant / mixer binding | `verify`, then `install --second-output usb` |
 | Touch screen dead | something enabled HDMI audio/DRM output | check `/boot/userconfig.txt` and the touch_display plugin config; reboot; re-run `install --second-output usb` if the HDMI variant sneaked in |
@@ -304,8 +352,9 @@ states above.
 - `software/volumio/dual-output/` — scripts (`deploy.sh`, `uninstall.sh`) plus
   `files/` with the engine (`jukebox-audio.sh`), the guard units/udev rule, the
   armv7 `camilladsp` binary and the armhf `cdsp` plugin + source. Full design doc
-  in its README (the ALSA split, the CamillaDSP tone step, variants, the `multi`
-  fail-safe).
+  in its README (the ALSA split, the CamillaDSP tone step, variants, USB-card
+  pinning by name + long-name match, the optional third S/PDIF branch, the
+  `multi` fail-safe).
 - `software/jukebox-pots/` — `jukebox-pots.service`: reads `POT volume` /
   `POT balance` / `POT single` / `POT multi second` from the PowerAndPots
   Arduino over USB serial and drives the DAC volume (Volumio API), balance

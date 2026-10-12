@@ -57,6 +57,17 @@
 #                                  [--analyser-gain dB] [--analyser-q Q]
 #   sudo ./jukebox-audio.sh install [--tone on|off] [--tone-bass HZ]
 #                                  [--tone-treble HZ] [--tone-q Q]
+#   sudo ./jukebox-audio.sh install [--usb-card NAME] [--usb-card-match SUBSTR]
+#         # pin the USB (analyser) card when several USB cards are plugged in:
+#         #   --usb-card Device_1 --usb-card-match "USB PnP"
+#   sudo ./jukebox-audio.sh install [--third-output spdif] [--spdif-card NAME]
+#                                  [--spdif-card-match SUBSTR] [--spdif-rate HZ]
+#                                  [--spdif-gain 0..1] [--spdif-format FMT]
+#         # add a third branch: a clean S/PDIF feed (no volume, no analyser EQ)
+#         # to a second USB card, e.g.
+#         #   --third-output spdif --spdif-card-match "DSD TECH"
+#         # --spdif-gain trims this branch only (1.0 = no trim, 0.7 = -3.1 dB)
+#         # --spdif-format pins its sample format (e.g. S16_LE; empty = auto)
 #   sudo ./jukebox-audio.sh verify  [--with-playback]
 #   sudo ./jukebox-audio.sh apply      # re-assert (used by guard units)
 #   sudo ./jukebox-audio.sh status
@@ -110,6 +121,26 @@ HDMI_CARD="${JB_HDMI_CARD:-}"
 HDMI_RATE="${JB_HDMI_RATE:-48000}"
 USB_CARD="${JB_USB_CARD:-}"
 USB_RATE="${JB_USB_RATE:-48000}"
+# Optional: substring of the card's long name in /proc/asound/cards used to
+# disambiguate when several USB sound cards are plugged in (e.g. "USB PnP"
+# for the analyser card vs "DSD TECH" for a second USB DAC).
+USB_CARD_MATCH="${JB_USB_CARD_MATCH:-}"
+# Optional THIRD output: a second USB card used as a clean digital (S/PDIF)
+# feed. It is added as a third branch of the same split, in parallel with the
+# DAC and the analyser, with no volume and no analyser EQ (a "pure" digital
+# copy). Only used with --second-output usb.
+THIRD_OUTPUT="${JB_THIRD_OUTPUT:-none}"     # none | spdif
+SPDIF_CARD="${JB_SPDIF_CARD:-}"
+SPDIF_CARD_MATCH="${JB_SPDIF_CARD_MATCH:-}"
+SPDIF_RATE="${JB_SPDIF_RATE:-48000}"
+# Linear gain (0..1] applied to the S/PDIF branch only, to trim a hot output
+# (e.g. a saturating analogue stage or a coax receiver with little headroom).
+# 1.0 == no attenuation ("pure" full-level copy). 0.7 == -3.1 dB.
+SPDIF_GAIN="${JB_SPDIF_GAIN:-1.0}"
+# Force the sample format the S/PDIF branch feeds to the card (empty = let the
+# 'plug' negotiate, usually the widest the card supports, e.g. S24_3LE). Some
+# cheap S/PDIF transmitters distorte/garble at 24-bit; pin S16_LE then.
+SPDIF_FORMAT="${JB_SPDIF_FORMAT:-}"
 JACK_LEVEL="${JB_JACK_LEVEL:-0dB}"          # 0.00 dB == full clean level
 JACK_LEVEL_RAW="${JB_JACK_LEVEL_RAW:-0}"
 # Analyser branch bass trim (see ANALYSER BASS TRIM above).
@@ -121,7 +152,7 @@ ANALYSER_Q="${JB_ANALYSER_Q:-0.5}"
 PLAY_TEST=0
 BOOT_APPLY=0
 JUNK_CONTROLS="JbTestMaster|AddProbeXyz|PersistA|BootCreateTest|LoopbackTest"
-VARIANTS="jack hdmi usb daconly"
+VARIANTS="jack hdmi usb usbspdif daconly"
 
 # ------------------------------------------------------------------- helpers
 
@@ -167,7 +198,7 @@ ensure_dsp_deps() {
   fi
 }
 
-usage() { sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # The engine lives in files/ together with the binaries and the systemd units /
@@ -236,14 +267,42 @@ detect_cards() {
   [ -n "$DAC_CARD" ]
 }
 
-# Find the USB sound card (anything that is not the I2S DAC, the jack, an
-# HDMI output or a loopback card). Prefer the explicit JB_USB_CARD.
-detect_usb_card() {
-  local f id
-  if [ -n "$USB_CARD" ]; then
-    [ -e "/proc/asound/$USB_CARD" ] && return 0
-    # fall through: the configured name may be stale
-    USB_CARD=""
+# Long name of a card id from /proc/asound/cards, e.g. "USB PnP Sound Device"
+# for id "Device_1". The id sits inside brackets padded with spaces, so the
+# second whitespace-separated token is "[Device_1" (note: no closing bracket).
+# Everything after "USB-Audio - " on that line is the long name.
+usb_card_long_name() {
+  awk -v id="$1" '
+    $2 == "[" id {
+      # fields: N [id ]: BUS - LONG NAME...
+      # drop the number, the bracketed id and the ":", then find " - "
+      line = $0
+      sub(/^[ 0-9]+ \[[^]]+\]: +/, "", line)
+      sub(/^[^ ]+ - /, "", line)   # strip "USB-Audio - "
+      print line
+      exit
+    }' /proc/asound/cards 2>/dev/null
+}
+
+# Echo the id of a USB sound card. Args: PREFERRED_ID MATCH_SUBSTRING.
+# PREFERRED_ID is used when its long name still matches MATCH (or MATCH is
+# empty); otherwise the cards are scanned and the first whose long name
+# contains MATCH wins. With several USB cards plugged in the card *id* alone is
+# ambiguous (the kernel hands out generic names like "Device" to every C-Media
+# based card), so MATCH disambiguates: e.g. "USB PnP" for the analyser card vs
+# "DSD TECH" for a second USB DAC. Returns 1 when nothing matches.
+find_usb_card() {
+  local want="$1" match="$2" f id long
+  if [ -n "$want" ] && [ -e "/proc/asound/$want" ]; then
+    if [ -n "$match" ]; then
+      long="$(usb_card_long_name "$want")"
+      case "$long" in
+        *"$match"*) printf '%s' "$want"; return 0 ;;
+        *) : ;;  # stale: the card moved to another name
+      esac
+    else
+      printf '%s' "$want"; return 0
+    fi
   fi
   for f in /proc/asound/card*/id; do
     [ -r "$f" ] || continue
@@ -255,10 +314,32 @@ detect_usb_card() {
       vc4hdmi*|*hdmi*) continue ;;
       Loopback|*loopback*|Dummy|*dummy*|null|*null*) continue ;;
     esac
-    USB_CARD="$id"
-    return 0
+    if [ -n "$match" ]; then
+      long="$(usb_card_long_name "$id")"
+      case "$long" in
+        *"$match"*) printf '%s' "$id"; return 0 ;;
+      esac
+      continue
+    fi
+    printf '%s' "$id"; return 0
   done
   return 1
+}
+
+# Resolve the analyser card (JB_USB_CARD / JB_USB_CARD_MATCH) into USB_CARD.
+detect_usb_card() {
+  local c
+  c="$(find_usb_card "$USB_CARD" "$USB_CARD_MATCH")" || { USB_CARD=""; return 1; }
+  USB_CARD="$c"
+  return 0
+}
+
+# Resolve the optional third (S/PDIF) card into SPDIF_CARD.
+detect_spdif_card() {
+  local c
+  c="$(find_usb_card "$SPDIF_CARD" "$SPDIF_CARD_MATCH")" || { SPDIF_CARD=""; return 1; }
+  SPDIF_CARD="$c"
+  return 0
 }
 
 card_num() {
@@ -312,12 +393,45 @@ usb_open_ok() {
   timeout 5 aplay -q -D "hw:CARD=$USB_CARD,DEV=0" -f S16_LE -r "$USB_RATE" -c 2 -d 1 /dev/zero >/dev/null 2>&1
 }
 
+# Optional third branch: a USB card used as a clean S/PDIF feed. Only active
+# with --second-output usb and --third-output spdif.
+spdif_available() {
+  [ "$THIRD_OUTPUT" = "spdif" ] || return 1
+  case "${JB_SPDIF_OVERRIDE:-}" in
+    off|no|0) return 1 ;;
+  esac
+  detect_spdif_card || return 1
+  # Never let the third branch be the same card as the analyser branch: the
+  # 'multi' plugin would try to open it twice. Without a match it would pick
+  # the first USB card, which is the analyser's.
+  if [ "$SPDIF_CARD" = "$USB_CARD" ]; then
+    SPDIF_CARD=""
+    return 1
+  fi
+  return 0
+}
+
+spdif_open_ok() {
+  [ -n "$SPDIF_CARD" ] || return 1
+  timeout 5 aplay -q -D "hw:CARD=$SPDIF_CARD,DEV=0" -f S16_LE -r "$SPDIF_RATE" -c 2 -d 1 /dev/zero >/dev/null 2>&1
+}
+
 variant_for_now() {
   case "$SECOND_OUTPUT" in
     jack) echo jack ;;
     none) echo daconly ;;
     hdmi) if hdmi_usable; then echo hdmi; else echo daconly; fi ;;
-    usb)  if usb_available; then echo usb;  else echo daconly; fi ;;
+    usb)
+      if usb_available; then
+        if [ "$THIRD_OUTPUT" = "spdif" ] && spdif_available; then
+          echo usbspdif
+        else
+          echo usb
+        fi
+      else
+        echo daconly
+      fi
+      ;;
     *) echo jack ;;
   esac
 }
@@ -326,6 +440,8 @@ live_variant() {
   local f
   for f in /etc/asound.conf "$SNIPPET_PATH"; do
     [ -f "$f" ] || continue
+    # usbspdif must be tested BEFORE usb (its marker contains the usb one).
+    if grep -q "jukebox-audio variant: usbspdif" "$f" 2>/dev/null; then echo usbspdif; return; fi
     if grep -q "jukebox-audio variant: hdmi" "$f" 2>/dev/null; then echo hdmi; return; fi
     if grep -q "jukebox-audio variant: usb" "$f" 2>/dev/null; then echo usb; return; fi
     if grep -q "jukebox-audio variant: jack" "$f" 2>/dev/null; then echo jack; return; fi
@@ -563,6 +679,102 @@ pcm.jukeboxUsb {
 EOF
 }
 
+# Variant usbspdif: like usb, plus a third branch to a second USB card used as
+# a clean digital (S/PDIF) feed. That branch has NO software volume and NO
+# analyser EQ: it is a straight digital copy of the stream (a "pure" feed).
+# The route fans the stereo signal out to 6 channels: a = DAC, b = analyser,
+# c = S/PDIF.
+render_snippet_usbspdif() {
+  cat <<EOF
+# jukebox-audio variant: usbspdif
+# Managed by jukebox-audio (dual output). Do not edit by hand.
+# Splits the 'volumio' pipeline into three outputs:
+#   - I2S DAC with software volume (SoftMaster)   -> controlled by Volumio
+#   - USB DAC at a constant level (analyser)      -> not affected by volume
+#   - USB S/PDIF at a constant level (pure feed)  -> no volume, no analyser EQ
+pcm.softvolume {
+    type            plug
+    slave {
+        pcm         "jukeboxRoute"
+        format      S32_LE
+    }
+}
+
+pcm.jukeboxRoute {
+    type            route
+    slave {
+        pcm         "jukeboxSplit"
+        channels    6
+    }
+    ttable.0.0 1
+    ttable.0.2 1
+    ttable.0.4 ${SPDIF_GAIN}
+    ttable.1.1 1
+    ttable.1.3 1
+    ttable.1.5 ${SPDIF_GAIN}
+}
+
+pcm.jukeboxSplit {
+    type            multi
+    slaves.a.pcm    "volumioSoftVol"
+    slaves.a.channels 2
+    slaves.b.pcm    "jukeboxEq"
+    slaves.b.channels 2
+    slaves.c.pcm    "jukeboxSpdif"
+    slaves.c.channels 2
+    bindings.0.slave   a
+    bindings.0.channel 0
+    bindings.1.slave   a
+    bindings.1.channel 1
+    bindings.2.slave   b
+    bindings.2.channel 0
+    bindings.3.slave   b
+    bindings.3.channel 1
+    bindings.4.slave   c
+    bindings.4.channel 0
+    bindings.5.slave   c
+    bindings.5.channel 1
+}
+
+$(render_tone_pcm usbspdif)
+
+pcm.volumioSoftVol {
+    type            softvol
+    slave {
+        pcm         "$(tone_or_post)"
+    }
+    control {
+        name        "SoftMaster Playback Volume"
+        card        "$DAC_CARD"
+        device      0
+    }
+    max_dB 0.0
+    min_dB -50.0
+    resolution 100
+}
+
+$(render_analyser_eq "jukeboxUsb" "$USB_RATE")
+
+pcm.jukeboxUsb {
+    type            plug
+    slave {
+        pcm         "hw:CARD=$USB_CARD,DEV=0"
+        rate        $USB_RATE
+    }
+}
+
+# Third branch: pure digital S/PDIF feed (no volume, no EQ).
+pcm.jukeboxSpdif {
+    type            plug
+    slave {
+        pcm         "hw:CARD=$SPDIF_CARD,DEV=0"
+        rate        $SPDIF_RATE
+${SPDIF_FORMAT:+        format      $SPDIF_FORMAT}
+    }
+}
+EOF
+}
+
 render_snippet_jack() {
   cat <<EOF
 # jukebox-audio variant: jack
@@ -744,10 +956,11 @@ EOF
 
 render_snippet() {
   case "$1" in
-    jack)    render_snippet_jack ;;
-    hdmi)    render_snippet_hdmi ;;
-    usb)     render_snippet_usb ;;
-    daconly) render_snippet_daconly ;;
+    jack)     render_snippet_jack ;;
+    hdmi)     render_snippet_hdmi ;;
+    usb)      render_snippet_usb ;;
+    usbspdif) render_snippet_usbspdif ;;
+    daconly)  render_snippet_daconly ;;
     *) return 1 ;;
   esac
 }
@@ -833,25 +1046,34 @@ write_canonical() {
     chmod 0644 "$APPLY_DIR/cdsp/camilla.$v.yml"
   done
   echo "$VERSION" >"$APPLY_DIR/VERSION"
+  # Quote values that may contain spaces (e.g. JB_USB_CARD_MATCH="USB PnP")
+  # so the file stays a valid shell source for load_config_env.
   cat >"$CONFIG_ENV" <<EOF
 # jukebox-audio settings (edited by install; used by the guard)
-JB_SECOND_OUTPUT=$SECOND_OUTPUT
-JB_DAC_CARD=$DAC_CARD
-JB_JACK_CARD=$JACK_CARD
-JB_HDMI_CARD=$HDMI_CARD
-JB_HDMI_RATE=$HDMI_RATE
-JB_USB_CARD=$USB_CARD
-JB_USB_RATE=$USB_RATE
-JB_JACK_LEVEL=$JACK_LEVEL
-JB_JACK_LEVEL_RAW=$JACK_LEVEL_RAW
-JB_ANALYSER_TRIM=$ANALYSER_TRIM
-JB_ANALYSER_FREQ_HZ=$ANALYSER_FREQ_HZ
-JB_ANALYSER_GAIN_DB=$ANALYSER_GAIN_DB
-JB_ANALYSER_Q=$ANALYSER_Q
-JB_TONE=$TONE_ENABLE
-JB_TONE_BASS_FREQ=$TONE_BASS_FREQ
-JB_TONE_TREBLE_FREQ=$TONE_TREBLE_FREQ
-JB_TONE_Q=$TONE_SHELF_Q
+JB_SECOND_OUTPUT="$SECOND_OUTPUT"
+JB_DAC_CARD="$DAC_CARD"
+JB_JACK_CARD="$JACK_CARD"
+JB_HDMI_CARD="$HDMI_CARD"
+JB_HDMI_RATE="$HDMI_RATE"
+JB_USB_CARD="$USB_CARD"
+JB_USB_RATE="$USB_RATE"
+JB_USB_CARD_MATCH="$USB_CARD_MATCH"
+JB_THIRD_OUTPUT="$THIRD_OUTPUT"
+JB_SPDIF_CARD="$SPDIF_CARD"
+JB_SPDIF_CARD_MATCH="$SPDIF_CARD_MATCH"
+JB_SPDIF_RATE="$SPDIF_RATE"
+JB_SPDIF_GAIN="$SPDIF_GAIN"
+JB_SPDIF_FORMAT="$SPDIF_FORMAT"
+JB_JACK_LEVEL="$JACK_LEVEL"
+JB_JACK_LEVEL_RAW="$JACK_LEVEL_RAW"
+JB_ANALYSER_TRIM="$ANALYSER_TRIM"
+JB_ANALYSER_FREQ_HZ="$ANALYSER_FREQ_HZ"
+JB_ANALYSER_GAIN_DB="$ANALYSER_GAIN_DB"
+JB_ANALYSER_Q="$ANALYSER_Q"
+JB_TONE="$TONE_ENABLE"
+JB_TONE_BASS_FREQ="$TONE_BASS_FREQ"
+JB_TONE_TREBLE_FREQ="$TONE_TREBLE_FREQ"
+JB_TONE_Q="$TONE_SHELF_Q"
 EOF
   write_analyser_eq_controls "$EQ_CONTROLS_SRC" >/dev/null
   ok "analyser bass trim: $ANALYSER_TRIM (${ANALYSER_FREQ_HZ} Hz ${ANALYSER_GAIN_DB} dB, Q ${ANALYSER_Q})"
@@ -923,6 +1145,13 @@ load_config_env() {
     HDMI_RATE="${JB_HDMI_RATE:-48000}"
     USB_CARD="${JB_USB_CARD:-}"
     USB_RATE="${JB_USB_RATE:-48000}"
+    USB_CARD_MATCH="${JB_USB_CARD_MATCH:-}"
+    THIRD_OUTPUT="${JB_THIRD_OUTPUT:-none}"
+    SPDIF_CARD="${JB_SPDIF_CARD:-}"
+    SPDIF_CARD_MATCH="${JB_SPDIF_CARD_MATCH:-}"
+    SPDIF_RATE="${JB_SPDIF_RATE:-48000}"
+    SPDIF_GAIN="${JB_SPDIF_GAIN:-1.0}"
+    SPDIF_FORMAT="${JB_SPDIF_FORMAT:-}"
     JACK_LEVEL="${JB_JACK_LEVEL:-0dB}"
     JACK_LEVEL_RAW="${JB_JACK_LEVEL_RAW:-0}"
     ANALYSER_TRIM="${JB_ANALYSER_TRIM:-on}"
@@ -1340,11 +1569,12 @@ remove_units() {
 }
 
 alsa_playback_test() {
-  local v="$1" dn hn jn un ok_dac=0 ok_second=0 pid wav
+  local v="$1" dn hn jn un sn ok_dac=0 ok_second=0 ok_third=1 pid wav
   dn="$(card_num "$DAC_CARD")"
   jn="$(card_num "$JACK_CARD")"
   hn="$(card_num "$HDMI_CARD")"
   un="$(card_num "$USB_CARD")"
+  sn="$(card_num "$SPDIF_CARD")"
   [ -n "$dn" ] || return 1
   # The cdsp tone step needs a source that paces the stream. /dev/zero is
   # written as fast as possible and makes the plugin report XRUN, so play a
@@ -1366,17 +1596,22 @@ PY
     jack)    [ -n "$jn" ] && grep -q RUNNING /proc/asound/card${jn}/pcm0p/sub*/status 2>/dev/null && ok_second=1 ;;
     hdmi)    [ -n "$hn" ] && grep -q RUNNING /proc/asound/card${hn}/pcm0p/sub*/status 2>/dev/null && ok_second=1 ;;
     usb)     [ -n "$un" ] && grep -q RUNNING /proc/asound/card${un}/pcm0p/sub*/status 2>/dev/null && ok_second=1 ;;
+    usbspdif)
+      ok_third=0
+      [ -n "$un" ] && grep -q RUNNING /proc/asound/card${un}/pcm0p/sub*/status 2>/dev/null && ok_second=1
+      [ -n "$sn" ] && grep -q RUNNING /proc/asound/card${sn}/pcm0p/sub*/status 2>/dev/null && ok_third=1
+      ;;
     daconly) ok_second=1 ;;
   esac
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   rm -f "$wav"
-  [ "$ok_dac" = 1 ] && [ "$ok_second" = 1 ]
+  [ "$ok_dac" = 1 ] && [ "$ok_second" = 1 ] && [ "$ok_third" = 1 ]
 }
 
 mpd_playback_test() {
   # Returns: 0 = passed, 1 = failed, 2 = skipped (nothing to play).
-  local was_playing=0 dn jn hn un r=0 cur="" restored=0 v added=0 track
+  local was_playing=0 dn jn hn un sn r=0 cur="" restored=0 v added=0 track
   v="$(live_variant)"
   mpc status 2>/dev/null | grep -q '\[playing\]' && was_playing=1
 
@@ -1417,12 +1652,17 @@ mpd_playback_test() {
   jn="$(card_num "$JACK_CARD")"
   hn="$(card_num "$HDMI_CARD")"
   un="$(card_num "$USB_CARD")"
+  sn="$(card_num "$SPDIF_CARD")"
   mpc status 2>/dev/null | grep -q '\[playing\]' || r=1
   grep -q RUNNING /proc/asound/card${dn}/pcm0p/sub*/status 2>/dev/null || r=1
   case "$v" in
     jack) [ -n "$jn" ] && grep -q RUNNING /proc/asound/card${jn}/pcm0p/sub*/status 2>/dev/null || r=1 ;;
     hdmi) [ -n "$hn" ] && grep -q RUNNING /proc/asound/card${hn}/pcm0p/sub*/status 2>/dev/null || r=1 ;;
     usb)  [ -n "$un" ] && grep -q RUNNING /proc/asound/card${un}/pcm0p/sub*/status 2>/dev/null || r=1 ;;
+    usbspdif)
+      [ -n "$un" ] && grep -q RUNNING /proc/asound/card${un}/pcm0p/sub*/status 2>/dev/null || r=1
+      [ -n "$sn" ] && grep -q RUNNING /proc/asound/card${sn}/pcm0p/sub*/status 2>/dev/null || r=1
+      ;;
   esac
   if [ "$restored" = 1 ]; then
     amixer -q -c "$DAC_CARD" sset SoftMaster "$cur" >/dev/null 2>&1 || true
@@ -1450,6 +1690,9 @@ cmd_install() {
       ;;
     usb)
       detect_usb_card || warn "second output usb requested, but no USB sound card is connected yet"
+      if [ "$THIRD_OUTPUT" = "spdif" ]; then
+        detect_spdif_card || warn "third output spdif requested, but no S/PDIF card is connected yet"
+      fi
       ;;
     none) ;;
     *) die "invalid second output: $SECOND_OUTPUT (use jack|hdmi|usb|none)" ;;
@@ -1464,6 +1707,18 @@ cmd_install() {
     echo "    HDMI card     : $HDMI_CARD  (rate $HDMI_RATE)"
   elif [ "$SECOND_OUTPUT" = "usb" ]; then
     echo "    USB card      : ${USB_CARD:-<not connected>}  (rate $USB_RATE)"
+    [ -n "$USB_CARD_MATCH" ] && echo "    USB card match: \"$USB_CARD_MATCH\" (long name)"
+    # Show which physical card was pinned, so a second USB card can never
+    # silently steal the analyser feed.
+    if [ -n "$USB_CARD" ]; then
+      echo "    USB card is   : $(usb_card_long_name "$USB_CARD")"
+    fi
+    if [ "$THIRD_OUTPUT" = "spdif" ]; then
+      echo "    Third output  : spdif"
+      echo "    S/PDIF card   : ${SPDIF_CARD:-<not connected>}  (rate $SPDIF_RATE)"
+      [ -n "$SPDIF_CARD_MATCH" ] && echo "    S/PDIF match  : \"$SPDIF_CARD_MATCH\" (long name)"
+      [ -n "$SPDIF_CARD" ] && echo "    S/PDIF card is: $(usb_card_long_name "$SPDIF_CARD")"
+    fi
   fi
 
   local vol_state="" tmp
@@ -1568,8 +1823,21 @@ cmd_apply() {
     log "apply: audio cards not found; nothing to do"
     exit 0
   fi
-  if [ ! -f "$CONFIG_ENV" ] || [ ! -f "$APPLY_DIR/asound.jack.conf" ]; then
-    log "apply: canonical files missing; regenerating"
+  # Re-resolve the pinned card names. The kernel can rename a USB card when
+  # another one is added/removed, so the canonical snippets (which embed the
+  # card id) must be regenerated when the resolution differs from what is
+  # stored; otherwise the live config would keep pointing at a stale id.
+  local cfg_usb="$USB_CARD" cfg_spdif="$SPDIF_CARD" need_regen=0
+  if detect_usb_card; then
+    [ "$USB_CARD" = "$cfg_usb" ] || need_regen=1
+  fi
+  if [ "$THIRD_OUTPUT" = "spdif" ]; then
+    if detect_spdif_card; then
+      [ "$SPDIF_CARD" = "$cfg_spdif" ] || need_regen=1
+    fi
+  fi
+  if [ ! -f "$CONFIG_ENV" ] || [ ! -f "$APPLY_DIR/asound.jack.conf" ] || [ "$need_regen" = 1 ]; then
+    log "apply: canonical files missing or card names changed; regenerating"
     write_canonical
   fi
   # Keep the analyser controls file in step with the canonical copy.
@@ -1716,6 +1984,18 @@ PY
         fail "USB branch is live but the card is not present"; rc=$((rc + 1))
       fi
       ;;
+    usbspdif)
+      if [ -n "$USB_CARD" ] && [ -e "/proc/asound/$USB_CARD" ]; then
+        ok "USB sound card present ($USB_CARD)"
+      else
+        fail "USB (analyser) branch is live but the card is not present"; rc=$((rc + 1))
+      fi
+      if [ -n "$SPDIF_CARD" ] && [ -e "/proc/asound/$SPDIF_CARD" ]; then
+        ok "S/PDIF (third) card present ($SPDIF_CARD)"
+      else
+        fail "S/PDIF branch is live but the card is not present"; rc=$((rc + 1))
+      fi
+      ;;
     daconly)
       if [ "$SECOND_OUTPUT" = "hdmi" ]; then
         warn "second output (HDMI) currently unavailable; DAC-only fallback active"
@@ -1762,11 +2042,11 @@ PY
   fi
 
   if alsa_playback_test "$v"; then
-    if [ "$v" = "daconly" ]; then
-      ok "chain opens (DAC only)"
-    else
-      ok "chain opens both outputs simultaneously"
-    fi
+    case "$v" in
+      daconly)  ok "chain opens (DAC only)" ;;
+      usbspdif) ok "chain opens all three outputs simultaneously" ;;
+      *)        ok "chain opens both outputs simultaneously" ;;
+    esac
   else
     fail "could not open the chain (is something else playing?)"; rc=$((rc + 1))
   fi
@@ -1804,7 +2084,24 @@ cmd_status() {
     if hdmi_edid_ok; then echo "hdmi sink       : present (EDID)"; else echo "hdmi sink       : absent (DAC-only fallback)"; fi
   fi
   if [ "$SECOND_OUTPUT" = "usb" ]; then
-    if detect_usb_card; then echo "usb card        : present ($USB_CARD)"; else echo "usb card        : absent (DAC-only fallback)"; fi
+    if detect_usb_card; then
+      echo "usb card        : present ($USB_CARD)"
+      # Show the long name so it's obvious which physical card is pinned.
+      echo "                  $(usb_card_long_name "$USB_CARD")"
+      [ -n "$USB_CARD_MATCH" ] && echo "card match      : \"$USB_CARD_MATCH\""
+    else
+      echo "usb card        : absent (DAC-only fallback)"
+    fi
+    if [ "$THIRD_OUTPUT" = "spdif" ]; then
+      echo "third output    : spdif"
+      if detect_spdif_card; then
+        echo "spdif card      : present ($SPDIF_CARD)"
+        echo "                  $(usb_card_long_name "$SPDIF_CARD")"
+        [ -n "$SPDIF_CARD_MATCH" ] && echo "spdif match     : \"$SPDIF_CARD_MATCH\""
+      else
+        echo "spdif card      : absent (falls back to usb two-branch chain)"
+      fi
+    fi
   fi
   if grep -q 'mixer_type[[:space:]]*"none"' /etc/mpd.conf 2>/dev/null; then echo "mpd mixer       : disabled"; else echo "mpd mixer       : active (may affect second output)"; fi
   if [ "$ANALYSER_TRIM" = "on" ]; then
@@ -1856,6 +2153,10 @@ cmd_uninstall() {
 
 main() {
   local mode=""
+  # Start from the saved settings (if any) so a plain reinstall does not
+  # silently drop pins/options that are not repeated on the command line
+  # (e.g. --usb-card-match or the optional S/PDIF third branch).
+  load_config_env
   while [ $# -gt 0 ]; do
     case "$1" in
       --with-playback) PLAY_TEST=1; shift ;;
@@ -1904,6 +2205,62 @@ main() {
       --analyser-freq=*) ANALYSER_FREQ_HZ="${1#*=}"; shift ;;
       --analyser-gain=*) ANALYSER_GAIN_DB="${1#*=}"; shift ;;
       --analyser-q=*) ANALYSER_Q="${1#*=}"; shift ;;
+      --usb-card=*) USB_CARD="${1#*=}"; shift ;;
+      --usb-card)
+        shift
+        [ $# -gt 0 ] || die "--usb-card needs a value (ALSA card name, e.g. Device_1)"
+        USB_CARD="$1"
+        shift
+        ;;
+      --usb-card-match=*) USB_CARD_MATCH="${1#*=}"; shift ;;
+      --usb-card-match)
+        shift
+        [ $# -gt 0 ] || die "--usb-card-match needs a value (substring of the card long name)"
+        USB_CARD_MATCH="$1"
+        shift
+        ;;
+      --third-output=*) THIRD_OUTPUT="${1#*=}"; shift ;;
+      --third-output)
+        shift
+        [ $# -gt 0 ] || die "--third-output needs a value: none|spdif"
+        THIRD_OUTPUT="$1"
+        shift
+        ;;
+      --spdif-card=*) SPDIF_CARD="${1#*=}"; shift ;;
+      --spdif-card)
+        shift
+        [ $# -gt 0 ] || die "--spdif-card needs a value (ALSA card name, e.g. Device)"
+        SPDIF_CARD="$1"
+        shift
+        ;;
+      --spdif-card-match=*) SPDIF_CARD_MATCH="${1#*=}"; shift ;;
+      --spdif-card-match)
+        shift
+        [ $# -gt 0 ] || die "--spdif-card-match needs a value (substring of the card long name)"
+        SPDIF_CARD_MATCH="$1"
+        shift
+        ;;
+      --spdif-rate=*) SPDIF_RATE="${1#*=}"; shift ;;
+      --spdif-rate)
+        shift
+        [ $# -gt 0 ] || die "--spdif-rate needs a value in Hz"
+        SPDIF_RATE="$1"
+        shift
+        ;;
+      --spdif-gain=*) SPDIF_GAIN="${1#*=}"; shift ;;
+      --spdif-gain)
+        shift
+        [ $# -gt 0 ] || die "--spdif-gain needs a value (linear 0..1, e.g. 0.7)"
+        SPDIF_GAIN="$1"
+        shift
+        ;;
+      --spdif-format=*) SPDIF_FORMAT="${1#*=}"; shift ;;
+      --spdif-format)
+        shift
+        [ $# -gt 0 ] || die "--spdif-format needs a value (e.g. S16_LE; empty = auto)"
+        SPDIF_FORMAT="$1"
+        shift
+        ;;
       -h|--help) usage; exit 0 ;;
       install|apply|verify|status|uninstall) mode="$1"; shift ;;
       *) die "unknown argument: $1" ;;
@@ -1921,6 +2278,13 @@ main() {
     on|off) ;;
     *) die "--tone must be on|off (got: $TONE_ENABLE)" ;;
   esac
+  case "$THIRD_OUTPUT" in
+    none|spdif) ;;
+    *) die "--third-output must be none|spdif (got: $THIRD_OUTPUT)" ;;
+  esac
+  case "$SPDIF_GAIN" in
+    ''|*[!0-9.]*) die "--spdif-gain must be a positive number (got: $SPDIF_GAIN)" ;;
+    esac
   [ -n "$mode" ] || { usage; exit 1; }
   case "$mode" in
     install)   cmd_install ;;

@@ -55,6 +55,74 @@ present at install time (e.g. USB unplugged), it installs a **DAC-only
 fallback** and switches to the full dual chain automatically when the device
 appears (udev handles hotplug).
 
+### Several USB cards: pinning the analyser card
+
+A USB sound card's ALSA *id* is generic (`Device`, `Device_1`, ...) and the
+kernel assigns it by enumeration order, so **plugging a second USB card can
+steal the name of the first one**. When that happens the analyser feed silently
+moves to the new card (and, since the `multi` split is all-or-nothing, the whole
+chain can break if that card cannot open at the requested rate).
+
+To avoid it, pin the analyser card by name **and** by a substring of its long
+name (shown by `status` as the second line next to `usb card`):
+
+```sh
+sudo ./files/jukebox-audio.sh install --second-output usb \
+     --usb-card Device_1 --usb-card-match "USB PnP"
+# or via env: JB_USB_CARD=Device_1 JB_USB_CARD_MATCH="USB PnP"
+```
+
+`detect_usb_card` then:
+
+* keeps working if the kernel renames the cards (it re-finds the card whose
+  long name matches, wherever it moved), and
+* falls back to **daconly** — never to the other USB card — if the pinned card
+  is unplugged.
+
+Without `JB_USB_CARD_MATCH` the old behaviour remains: the first non-DAC USB
+card found wins. This is the exact setup on the jukebox: `Device_1` is the
+C-Media `USB PnP Sound Device` (analyser feed, `08bb:2902`) and `Device` is a
+second `DSD TECH USB Audio Device` (`0d8c:0247`) used as the clean S/PDIF feed
+(see below).
+
+### Optional third branch: a clean S/PDIF feed
+
+With `--second-output usb`, a **third branch** can be added to the same split:
+a second USB card used as a clean digital (S/PDIF) feed. It is wired in
+parallel with the DAC and the analyser and carries **no volume and no analyser
+EQ** — a straight digital copy of the stream (a "pure" feed for an external
+DAC, receiver or digital recorder):
+
+```sh
+sudo ./files/jukebox-audio.sh install --second-output usb \
+     --usb-card Device_1 --usb-card-match "USB PnP" \
+     --third-output spdif --spdif-card-match "DSD TECH"
+```
+
+This produces the `usbspdif` variant: `jukeboxRoute` fans out to 6 channels
+(a = DAC, b = analyser, c = S/PDIF) and `jukeboxSplit` gets a third slave
+`jukeboxSpdif` -> `hw:CARD=<spdif>,DEV=0`. Options: `--third-output none|spdif`,
+`--spdif-card NAME`, `--spdif-card-match SUBSTR`, `--spdif-rate HZ`
+(`JB_THIRD_OUTPUT`, `JB_SPDIF_CARD`, `JB_SPDIF_CARD_MATCH`, `JB_SPDIF_RATE`).
+
+* The third card is pinned the same way as the analyser card (name + long-name
+  match), so a kernel rename does not break it. It must resolve to a card
+  *different* from the analyser's (otherwise the branch is dropped).
+* Fail-safe: if the S/PDIF card is missing the chain simply falls back to the
+  two-branch `usb` variant; it never takes down the whole split.
+* On the jukebox this is the `DSD TECH USB Audio Device` (`0d8c:0247`), which
+  exposes `iec958:CARD=Device` (IEC958 / S/PDIF output), PCM 16/24-bit at
+  44.1–96 kHz. It does **not** do native DSD over ALSA.
+* **The two USB sound cards must be on different USB hubs.** On a Pi 4 the VL805
+  controller plus a single-TT hub cannot run two full-speed isochronous streams
+  at once: with both cards open the controller disables an endpoint
+  (`xhci_hcd: ERROR Transfer event for disabled endpoint`) and the second card
+  goes silent, even though each works alone. Put one card directly in a Pi USB
+  port and the other on the external hub (different Transaction Translators);
+  `lsusb -t` must show the two `Class=Audio ... 12M` entries under different
+  `Hub` nodes. This is a documented Pi4 limitation (raspberrypi/linux#3962), not
+  a chain bug.
+
 ## Install
 
 From this directory (the deploy wrapper copies the package — scripts, the
@@ -99,8 +167,9 @@ A reboot is recommended after installing.
 ```
 
 `verify` checks the ALSA chain, the volume-control binding, MPD settings,
-the second output state (USB card / HDMI EDID / jack level) and opens the
-chain on both outputs. With `--with-playback` it also plays the MPD queue
+the second output state (USB card / HDMI EDID / jack level), the optional
+third (S/PDIF) card, and opens the chain on every branch. With
+`--with-playback` it also plays the MPD queue
 briefly (at low volume) to check the real playback path; if the queue is empty
 (e.g. right after a reboot) it pulls a track from the library so there is
 something to play, then cleans it up — the test only fails if the audio path is
@@ -111,7 +180,8 @@ really broken, not because the queue happened to be empty.
 ```
 volumio -> softvolume -> jukeboxRoute -> jukeboxSplit (multi)
     |- volumioSoftVol (softvol, SoftMaster) -> jukeboxTone -> postVolume -> volumioOutput -> volumioHw (I2S DAC)
-    '- jukeboxEq (analyser bass trim) -> jukeboxUsb | jukeboxHdmi | jukeboxJack             (fixed level)
+    |- jukeboxEq (analyser bass trim) -> jukeboxUsb | jukeboxHdmi | jukeboxJack             (fixed level)
+    '- jukeboxSpdif                    -> jukeboxSpdif (USB S/PDIF)   [usbspdif only]
 ```
 
 * The software volume (`SoftMaster`) sits **after** the split, on the DAC
@@ -121,6 +191,8 @@ volumio -> softvolume -> jukeboxRoute -> jukeboxSplit (multi)
   Without the tone (`--no-tone`) it is absent and the chain is the original one.
 * The second branch has no volume control at all: its level is inherently
   constant (USB/HDMI) or pinned by keeping the jack mixer at full level.
+* The optional third branch (`usbspdif`) is a plain digital copy: no `softvol`
+  and no `jukeboxEq`, so it is unaffected by volume and by the analyser trim.
 * Volumio's ALSA config generator produces `/etc/asound.conf` from plugin
   contributions. The contribution file is replaced in place, so a normal
   regeneration yields the same split chain instead of flattening it.
@@ -196,19 +268,31 @@ device can disappear (USB unplugged, extractor off, ...), the chain is
 managed dynamically:
 
 * second device absent -> **daconly** variant: only the DAC plays;
-* second device present -> full dual-output variant.
+* second device present -> **usb** (or **hdmi**/**jack**) dual-output variant;
+* second present and `--third-output spdif` with the S/PDIF card present ->
+  **usbspdif** (three branches). If the S/PDIF card is missing the chain drops
+  back to **usb**, never to daconly.
 
 The decision runs at boot, on device hotplug (udev) and whenever the watched
 files change. All variants are kept in `/usr/local/jukebox-audio/` and the
-live one is selected automatically. `JB_USB_OVERRIDE=on|off` (or
-`JB_HDMI_OVERRIDE`) force the verdict for testing.
+live one is selected automatically. `apply` re-resolves the pinned card names
+each run and regenerates the canonical snippets if a card was renamed.
+`JB_USB_OVERRIDE=on|off`, `JB_HDMI_OVERRIDE` or `JB_SPDIF_OVERRIDE` force the
+verdict for testing.
 
 ## Notes and caveats
 
 * Cards are auto-detected (`sndrpirpidac` as DAC, the extra USB card as the
   second output). Override with `JB_DAC_CARD=`, `JB_JACK_CARD=`,
-  `JB_HDMI_CARD=`, `JB_USB_CARD=`.
-* USB/HDMI sample rate is `48000` by default (`JB_USB_RATE` / `JB_HDMI_RATE`).
+  `JB_HDMI_CARD=`, `JB_USB_CARD=`. With more than one USB card, also set
+  `JB_USB_CARD_MATCH="<substring of the long name>"` (or `--usb-card-match`) so
+  the analyser branch cannot be stolen by a newly added card.
+* The optional third branch is `JB_THIRD_OUTPUT=none|spdif` with
+  `JB_SPDIF_CARD`, `JB_SPDIF_CARD_MATCH`, `JB_SPDIF_RATE` (or the `--third-output`
+  / `--spdif-card` / `--spdif-card-match` / `--spdif-rate` flags). It requires
+  `--second-output usb`.
+* USB/HDMI/S-PDIF sample rate is `48000` by default (`JB_USB_RATE`,
+  `JB_HDMI_RATE`, `JB_SPDIF_RATE`).
 * Jack reference level is `0 dB` (`JB_JACK_LEVEL` / `JB_JACK_LEVEL_RAW`).
 * Analyser bass trim defaults to `on` at `60 Hz / -6.02 dB / Q 0.5`
   (`JB_ANALYSER_TRIM`, `JB_ANALYSER_FREQ_HZ`, `JB_ANALYSER_GAIN_DB`,

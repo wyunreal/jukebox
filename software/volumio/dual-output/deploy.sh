@@ -23,9 +23,17 @@
 #   status                      show current state
 #   uninstall                   remove the feature and restore backups
 #
+# Any jukebox-audio tuning option is forwarded verbatim to the installer
+# (--analyser-trim/-freq/-gain/-q, --tone, --tone-bass/-treble/-q, --no-tone,
+#  --no-analyser-trim, --usb-card, --usb-card-match, --third-output,
+#  --spdif-card, --spdif-card-match, --spdif-rate).
+#
 # Examples:
 #   ./deploy.sh install
 #   ./deploy.sh install --second-output usb
+#   ./deploy.sh install --second-output usb --usb-card Device_1 --usb-card-match "USB PnP"
+#   ./deploy.sh install --second-output usb --usb-card-match "USB PnP" \
+#                       --third-output spdif --spdif-card-match "DSD TECH"
 #   ./deploy.sh --host volumio@<host> verify --with-playback
 #   ./deploy.sh uninstall
 #
@@ -41,7 +49,7 @@ LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES=(README.md)
 FILES_DIR="files"
 
-usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; }
 
 say()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ok()   { printf '    \033[1;32mok\033[0m   %s\n' "$*"; }
@@ -93,6 +101,8 @@ run_ssh_root() {
 main() {
   local command="install" with_playback="" second_output=""
   local positional=()
+  # jukebox-audio tuning options, forwarded verbatim to the installer.
+  local -a audio_args=()
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -105,6 +115,18 @@ main() {
       --second-output=*) second_output="$1"; shift ;;
       --second-output)
         second_output="$1 $2"; shift 2 ;;
+      # Options that take a separate value.
+      --analyser-trim|--analyser-freq|--analyser-gain|--analyser-q|\
+      --tone|--tone-bass|--tone-treble|--tone-q|--usb-card|--usb-card-match|\
+      --third-output|--spdif-card|--spdif-card-match|--spdif-rate|--spdif-gain|--spdif-format)
+        [ $# -ge 2 ] || die "$1 needs a value"
+        audio_args+=("$1" "$2"); shift 2 ;;
+      # Options with an inline value, and value-less flags.
+      --analyser-trim=*|--analyser-freq=*|--analyser-gain=*|--analyser-q=*|\
+      --tone=*|--tone-bass=*|--tone-treble=*|--tone-q=*|--usb-card=*|--usb-card-match=*|\
+      --third-output=*|--spdif-card=*|--spdif-card-match=*|--spdif-rate=*|--spdif-gain=*|--spdif-format=*|\
+      --no-analyser-trim|--no-tone)
+        audio_args+=("$1"); shift ;;
       -*) die "unknown option: $1 (see --help)" ;;
       *) positional+=("$1"); shift ;;
     esac
@@ -148,6 +170,10 @@ main() {
   remote_cmd="$REMOTE_DIR/$FILES_DIR/$SCRIPT_NAME $command"
   [ -n "$second_output" ] && remote_cmd="$remote_cmd $second_output"
   [ -n "$with_playback" ] && remote_cmd="$remote_cmd $with_playback"
+  if [ "${#audio_args[@]}" -gt 0 ]; then
+    local a
+    for a in "${audio_args[@]}"; do remote_cmd="$remote_cmd $(printf '%q' "$a")"; done
+  fi
 
   if [ "$command" = "status" ]; then
     say "Running: $command"
