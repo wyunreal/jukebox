@@ -285,6 +285,74 @@ each run and regenerates the canonical snippets if a card was renamed.
 `JB_USB_OVERRIDE=on|off`, `JB_HDMI_OVERRIDE` or `JB_SPDIF_OVERRIDE` force the
 verdict for testing.
 
+### The config guard
+
+Volumio regenerates `/etc/asound.conf` and the ALSA snippet from its own
+templates whenever you touch its audio pages, and the device set changes on
+hotplug; either would flatten the split chain (losing the analyser/S/PDIF
+branches and the DAC-only volume binding). Three pieces keep it in place:
+
+| Piece | Installed at | Role |
+| --- | --- | --- |
+| `jukebox-audio-guard.path` | `/etc/systemd/system/` | `PathChanged` watcher |
+| `jukebox-audio-guard.service` | `/etc/systemd/system/` | `oneshot` → `jukebox-audio.sh apply --boot` |
+| `89-jukebox-audio.rules` | `/etc/udev/rules.d/` | hotplug trigger |
+
+**What it watches** (`PathChanged`, i.e. content changes, not mere reads):
+`/etc/asound.conf`, the Volumio snippet `softvolume.postVolume.conf` and
+`special_cards_config.json`. **udev** additionally restarts the guard service on
+an HDMI DRM change (`card*-HDMI-A-*`, the phantom HDMI output) and on any sound
+card add/remove (analyser / S/PDIF replug). The `.service` is `enabled`, so the
+chain is also re-asserted at every boot, after `alsa-restore.service`.
+
+**What `apply` does**, each run:
+
+1. waits 2 s, loads `config.env`, detects the cards;
+2. re-resolves the pinned card names and **regenerates the canonical snippets**
+   if the kernel renamed a USB card (`Device` <-> `Device_1`);
+3. refreshes the analyser controls file (`analyser-eq.bin`) if it changed;
+4. computes the **desired** variant (`variant_for_now`: usbspdif/usb/daconly…)
+   against the **live** one and, if they differ, rewrites `/etc/asound.conf` and
+   the snippet from the canonical copies in `/usr/local/jukebox-audio/`;
+5. re-asserts `mpd.conf`, `special_cards_config.json`, Volumio's `config.json`,
+   the jack level and the `SoftMaster` elements, and cleans stale kernel
+   controls;
+6. restarts MPD — and Volumio only if its config changed — **only if something
+   changed**, non-blocking, throttled to at most one Volumio restart every
+   `VOLUMIO_RESTART_MIN_INTERVAL` (300 s) via a stamp in
+   `/run/jukebox-audio-volumio-restart`.
+
+**What it does *not* touch** (so it never fights the accessories):
+
+* the CamillaDSP configs — the **tone** and **pure direct** changes from
+  `jukebox-pots` persist across guard runs;
+* the analyser card's hardware `PCM` control — the **spectrum** switch;
+* the *value* of `SoftMaster` — the guard only ensures the element exists;
+  `alsa-restore` and `jukebox-pots` set the value.
+
+It *does* own the `softvol` calibration (the exact-0 dB top), since that lives in
+the canonical snippet.
+
+> **Don't hand-edit** `/etc/asound.conf` or the snippet: the guard reverts them.
+> Edit the canonical copy in `/usr/local/jukebox-audio/` and run `apply`, or
+> reinstall. To experiment, stop the watcher first:
+>
+> ```sh
+> sudo systemctl stop jukebox-audio-guard.path    # ... then start it again
+> ```
+
+**Debugging:**
+
+```sh
+systemctl status jukebox-audio-guard.path
+journalctl -u jukebox-audio-guard -n 50
+tail -n 50 /var/log/jukebox-audio.log   # apply leaves a trace here
+```
+
+The other packages repeat the same pattern (`jukebox-ui-guard`,
+`jukebox-overlay-guard`, the `ui-nav` guard), each restoring from its own
+canonical copy under `/usr/local/jukebox-*/`.
+
 ## Notes and caveats
 
 * Cards are auto-detected (`sndrpirpidac` as DAC, the extra USB card as the
