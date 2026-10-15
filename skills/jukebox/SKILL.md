@@ -1,6 +1,6 @@
 ---
 name: jukebox
-description: Operate and troubleshoot the user's homemade jukebox — a Raspberry Pi 4B running Volumio with a custom multi-output audio chain (I2S DAC speakers, volume-controlled, with a pure-direct ON/OFF switch; a USB sound card feeding a hardware spectrum analyser whose level a 3-position switch selects; optionally a third fixed-level USB S/PDIF feed) and a DSI touch screen. Use this skill whenever the user mentions "the jukebox", "la jukebox", "el jukebox", "Volumio", "la rocola", the music box, its audio/volume/spectrum analyser/touch screen, its music storage/HDDs (RAID), or asks to connect to it, SSH in, check/fix/change its sound or storage setup, or run the audio installer — even when they don't explicitly say "jukebox".
+description: Operate and troubleshoot the user's homemade jukebox — a Raspberry Pi 4B running Volumio with a custom multi-output audio chain (I2S DAC speakers, volume-controlled, with a pure-direct ON/OFF switch; a USB sound card feeding a hardware spectrum analyser whose level a 3-position switch selects; optionally a third USB S/PDIF feed with the DAC's volume plus its own tone) and a DSI touch screen. Use this skill whenever the user mentions "the jukebox", "la jukebox", "el jukebox", "Volumio", "la rocola", the music box, its audio/volume/spectrum analyser/touch screen, its music storage/HDDs (RAID), or asks to connect to it, SSH in, check/fix/change its sound or storage setup, or run the audio installer — even when they don't explicitly say "jukebox".
 ---
 
 # Jukebox (Volumio on Raspberry Pi)
@@ -18,11 +18,17 @@ kernel 6.12.y) with:
   **`MULTI PUSH switch`** is the **pure-direct** ON/OFF switch for the I2S DAC
   (ON = bypass volume/balance/tone, bit-perfect). Each card's ALSA number
   **and id** are dynamic — always find it by name (long-name match).
-- **Optional third fixed-level output**: a second USB card used as a clean
-  **S/PDIF** feed (no volume, no analyser EQ) for an external DAC/receiver. On
-  this box it is a `DSD TECH USB Audio Device` (C-Media `0d8c:0247`, exposes
-  `iec958`; PCM 16/24-bit, 44.1–96 kHz; **no** native DSD over ALSA). Wired only
-  with `--third-output spdif` (variant `usbspdif`). Its id is also dynamic.
+- **Optional third output**: a second USB card used as a **S/PDIF** feed for an
+  external DAC/receiver. It gets the **same volume/balance as the DAC** (a
+  second `softvol` reading the shared `SoftMaster` control) plus its own
+  **bass/treble tone** via an ALSA `equal` (CAPS Eq4p: band a = low shelf, band
+  d = high shelf); pure direct leaves it full level/flat. It does **not** share
+  the DAC's CamillaDSP tone: a single CamillaDSP driving two independently
+  clocked devices (ALSA `multi`) aborts after ~2 min, and two `cdsp` in one
+  `multi` deadlock. On this box it is a `DSD TECH USB Audio Device` (C-Media
+  `0d8c:0247`, exposes `iec958`; PCM 16/24-bit, 44.1–96 kHz; **no** native DSD
+  over ALSA). Wired only with `--third-output spdif` (variant `usbspdif`). Its
+  id is also dynamic.
   **It must be plugged into a different USB hub than the analyser card** (on this
   box: DSD TECH in a Pi port `1-1.1`, USB PnP on the hub `1-1.2.2`); see the
   golden rules — two full-speed USB audio cards on one single-TT hub break.
@@ -145,7 +151,18 @@ sudo /usr/local/jukebox-audio/jukebox-audio.sh install --second-output usb \
 `detect_usb_card`/`detect_spdif_card` re-find the card by long name if the id
 changes, and fall back to `usb`/`daconly` — never mix the two USB cards — when
 one is unplugged. `status` prints each card's long name. To drop the third
-branch: reinstall with `--third-output none`.
+output: reinstall with `--third-output none`.
+
+**S/PDIF tone and volume.** The `usbspdif` third branch carries the same volume
++ balance as the DAC (its `volumioSpdifVol` `softvol` reads the same
+`SoftMaster` control) and its own tone: an ALSA `equal` plugin using CAPS Eq4p,
+band a = low shelf (bass), band d = high shelf (treble). `jukebox-pots`
+rewrites its Eq4p controls file `/var/lib/jukebox-audio/spdif-eq.bin` **live**
+(via `/usr/local/jukebox-audio/eq-write.py`) when the tone pots move; the
+`equal` plugin reads it without reopening the device. `--spdif-rate` pins the
+S/PDIF leg (default 48000) and `--spdif-gain` trims it. Pure direct forces
+SoftMaster to max and both tone stages to 0 dB. The tone is a separate stage
+from the DAC's CamillaDSP, so the two curves are close but not bit-identical.
 
 **Analyser bass trim.** The analyser (second) branch carries a fixed low-shelf
 filter so the spectrum analyser's hardware bass over-read is compensated. It is

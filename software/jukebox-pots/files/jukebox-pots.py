@@ -127,6 +127,15 @@ TONE_TREBLE_INVERT = _env_bool("JP_TONE_TREBLE_INVERT", False)
 TONE_TEMPLATE = _env("JP_TONE_TEMPLATE", "/usr/local/jukebox-audio/cdsp/camilla.%s.yml")
 TONE_ACTIVE = _env("JP_TONE_ACTIVE", "/var/lib/jukebox-audio/camilla-active.%s.yml")
 TONE_VARIANTS = ("usb", "usbspdif", "hdmi", "jack", "daconly")
+# The S/PDIF branch's tone is an ALSA 'equal' (CAPS Eq4p): band a = low shelf
+# (bass), band d = high shelf (treble). Its Eq4p controls file is rewritten live
+# here; the helper ships with jukebox-audio.
+EQ_WRITE = _env("JP_EQ_WRITE", "/usr/local/jukebox-audio/eq-write.py")
+SPDIF_EQ_CONTROLS = _env("JP_SPDIF_EQ", "/var/lib/jukebox-audio/spdif-eq.bin")
+TONE_BASS_FREQ = _env_int("JP_TONE_BASS_FREQ", 120)
+TONE_TREBLE_FREQ = _env_int("JP_TONE_TREBLE_FREQ", 6000)
+TONE_SHELF_Q = _env_float("JP_TONE_Q", 0.7)
+EQ_CAPS_ID = _env_int("JP_EQ_CAPS_ID", 2608)
 # CamillaDSP is (re)started by the cdsp plugin; we locate it to reload it.
 CAMILLA_PROC = _env("JP_CAMILLA_PROC", "camilladsp")
 
@@ -578,6 +587,21 @@ class ToneControl:
         except (OSError, subprocess.SubprocessError):
             pass
 
+    def _write_spdif_eq(self, bass_db: float, treble_db: float) -> None:
+        """Rewrite the S/PDIF branch's Eq4p controls file (read live by the
+        'equal' plugin, so no device reopen is needed)."""
+        if not os.path.exists(EQ_WRITE):
+            return
+        try:
+            subprocess.run(
+                ["python3", EQ_WRITE, SPDIF_EQ_CONTROLS,
+                 str(TONE_BASS_FREQ), "%.2f" % bass_db, str(TONE_SHELF_Q),
+                 str(TONE_TREBLE_FREQ), "%.2f" % treble_db, str(TONE_SHELF_Q),
+                 str(EQ_CAPS_ID)],
+                timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     def apply(self) -> None:
         if not TONE_ENABLE:
             return
@@ -603,6 +627,7 @@ class ToneControl:
             return
         self._warned = False
         self._reload_camilla()
+        self._write_spdif_eq(want[0], want[1])
         self.last = want
         log("tone bass %+.1f dB / treble %+.1f dB%s"
             % (want[0], want[1], " (pure direct)" if self.direct else ""))

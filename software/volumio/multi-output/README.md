@@ -85,13 +85,14 @@ C-Media `USB PnP Sound Device` (analyser feed, `08bb:2902`) and `Device` is a
 second `DSD TECH USB Audio Device` (`0d8c:0247`) used as the clean S/PDIF feed
 (see below).
 
-### Optional third branch: a clean S/PDIF feed
+### Optional third output: a processed S/PDIF feed
 
-With `--second-output usb`, a **third branch** can be added to the same split:
-a second USB card used as a clean digital (S/PDIF) feed. It is wired in
-parallel with the DAC and the analyser and carries **no volume and no analyser
-EQ** — a straight digital copy of the stream (a "pure" feed for an external
-DAC, receiver or digital recorder):
+With `--second-output usb`, a **third output** can be added to the same split:
+a second USB card used as a **S/PDIF** feed for an external DAC or receiver. It
+gets the **same volume/balance as the DAC** (a second `softvol` reading the
+shared `SoftMaster` control) and its own **bass/treble tone** via the ALSA
+`equal` plugin (CAPS Eq4p: band a = low shelf = bass, band d = high shelf =
+treble). The analyser branch is left untouched:
 
 ```sh
 sudo ./files/jukebox-audio.sh install --second-output usb \
@@ -100,10 +101,26 @@ sudo ./files/jukebox-audio.sh install --second-output usb \
 ```
 
 This produces the `usbspdif` variant: `jukeboxRoute` fans out to 6 channels
-(a = DAC, b = analyser, c = S/PDIF) and `jukeboxSplit` gets a third slave
-`jukeboxSpdif` -> `hw:CARD=<spdif>,DEV=0`. Options: `--third-output none|spdif`,
-`--spdif-card NAME`, `--spdif-card-match SUBSTR`, `--spdif-rate HZ`
-(`JB_THIRD_OUTPUT`, `JB_SPDIF_CARD`, `JB_SPDIF_CARD_MATCH`, `JB_SPDIF_RATE`).
+(a = DAC, b = analyser, c = S/PDIF) and `jukeboxSplit`'s third slave is
+`volumioSpdifVol` (`softvol` -> `jukeboxSpdifEq` Eq4p -> `jukeboxSpdif` ->
+`hw:CARD=<spdif>,DEV=0`). Options: `--third-output none|spdif`,
+`--spdif-card NAME`, `--spdif-card-match SUBSTR`, `--spdif-rate HZ`,
+`--spdif-gain 0..1`, `--spdif-format FMT` (`JB_THIRD_OUTPUT`, `JB_SPDIF_CARD`,
+`JB_SPDIF_CARD_MATCH`, `JB_SPDIF_RATE`, `JB_SPDIF_GAIN`, `JB_SPDIF_FORMAT`).
+
+* The S/PDIF's tone is a **separate stage** (CAPS Eq4p) from the DAC's
+  CamillaDSP, so its curve is close to — but not bit-identical to — the DAC's.
+  `jukebox-pots` rewrites its Eq4p controls file
+  (`/var/lib/jukebox-audio/spdif-eq.bin`) **live** when the tone pots move.
+* **Pure direct** (SoftMaster at max, both tone stages at 0 dB) leaves the DAC
+  and the S/PDIF at full level and flat.
+* The S/PDIF leg is rate-pinned to `--spdif-rate` (default 48000).
+* Why not simply fan a single CamillaDSP out to both outputs? The ALSA `multi`
+  plugin writes two devices in lockstep; with independent clocks (the Pi's I2S
+  clock vs the USB card's crystal) one leg's buffer stops draining and
+  CamillaDSP aborts after 100 failed writes (`giving up after 100 write
+  attempts`). And two `cdsp` slaves in one `multi` deadlock. So each output
+  keeps its own processing stage.
 
 * The third card is pinned the same way as the analyser card (name + long-name
   match), so a kernel rename does not break it. It must resolve to a card
@@ -196,8 +213,10 @@ volumio -> softvolume -> jukeboxRoute -> jukeboxSplit (multi)
   Without the tone (`--no-tone`) it is absent and the chain is the original one.
 * The second branch has no volume control at all: its level is inherently
   constant (USB/HDMI) or pinned by keeping the jack mixer at full level.
-* The optional third branch (`usbspdif`) is a plain digital copy: no `softvol`
-  and no `jukeboxEq`, so it is unaffected by volume and by the analyser trim.
+* The optional third output (`usbspdif`) is **not** a plain copy: it has its own
+  `softvol` (reading the shared `SoftMaster`, so volume and balance follow the
+  DAC) and its own tone stage (ALSA `equal`/CAPS Eq4p, low+high shelf). The
+  analyser branch keeps no volume and no tone.
 * Volumio's ALSA config generator produces `/etc/asound.conf` from plugin
   contributions. The contribution file is replaced in place, so a normal
   regeneration yields the same split chain instead of flattening it.
@@ -360,10 +379,12 @@ canonical copy under `/usr/local/jukebox-*/`.
   `JB_HDMI_CARD=`, `JB_USB_CARD=`. With more than one USB card, also set
   `JB_USB_CARD_MATCH="<substring of the long name>"` (or `--usb-card-match`) so
   the analyser branch cannot be stolen by a newly added card.
-* The optional third branch is `JB_THIRD_OUTPUT=none|spdif` with
-  `JB_SPDIF_CARD`, `JB_SPDIF_CARD_MATCH`, `JB_SPDIF_RATE` (or the `--third-output`
-  / `--spdif-card` / `--spdif-card-match` / `--spdif-rate` flags). It requires
-  `--second-output usb`.
+* The optional third output is `JB_THIRD_OUTPUT=none|spdif` with
+  `JB_SPDIF_CARD`, `JB_SPDIF_CARD_MATCH`, `JB_SPDIF_RATE`, `JB_SPDIF_GAIN`,
+  `JB_SPDIF_FORMAT` (or the `--third-output` / `--spdif-card` /
+  `--spdif-card-match` / `--spdif-rate` / `--spdif-gain` / `--spdif-format`
+  flags). It requires `--second-output usb`. Its tone (CAPS Eq4p) is driven by
+  `jukebox-pots` via `/var/lib/jukebox-audio/spdif-eq.bin`.
 * USB/HDMI/S-PDIF sample rate is `48000` by default (`JB_USB_RATE`,
   `JB_HDMI_RATE`, `JB_SPDIF_RATE`).
 * Jack reference level is `0 dB` (`JB_JACK_LEVEL` / `JB_JACK_LEVEL_RAW`).

@@ -97,6 +97,13 @@ EQ_CONTROLS_DEST="/var/lib/jukebox-audio/analyser-eq.bin"
 EQ_LIBRARY="/usr/lib/ladspa/caps.so"
 EQ_MODULE="Eq4p"
 EQ_CAPS_ID=2608
+# The S/PDIF branch's tone (usbspdif) uses the same alsaequal/CAPS Eq4p plugin
+# with its own controls file: band a = low shelf (bass), band d = high shelf
+# (treble). jukebox-pots rewrites it live (the 'equal' plugin reads the mmap'd
+# controls on every cycle, so the device is never reopened).
+EQ_WRITE="$APPLY_DIR/eq-write.py"
+SPDIF_EQ_CONTROLS_SRC="$APPLY_DIR/spdif-eq.bin"
+SPDIF_EQ_CONTROLS_DEST="/var/lib/jukebox-audio/spdif-eq.bin"
 
 # --- tone control (bass/treble via CamillaDSP) ------------------------------
 # An ALSA "cdsp" plugin in front of the split runs CamillaDSP, whose pipeline
@@ -182,8 +189,16 @@ dsp_deps_present() {
     && [ -e "$EQ_LIBRARY" ]
 }
 
+# The alsaequal/CAPS 'equal' plugin is needed for the analyser trim and/or the
+# S/PDIF branch's tone.
+dsp_needed() {
+  [ "$ANALYSER_TRIM" = "on" ] && return 0
+  [ "$THIRD_OUTPUT" = "spdif" ] && [ "$TONE_ENABLE" = "on" ] && return 0
+  return 1
+}
+
 ensure_dsp_deps() {
-  [ "$ANALYSER_TRIM" = "on" ] || return 0
+  dsp_needed || return 0
   dsp_deps_present && return 0
   say "Installing DSP dependencies (alsaequal + CAPS LADSPA)"
   if apt-get install -y --no-install-recommends caps libasound2-plugin-equal >/dev/null 2>&1 \
@@ -534,6 +549,48 @@ print("wrote %s (%d bytes)" % (path, length))
 PY
 }
 
+# The S/PDIF branch's tone controls file (usbspdif): low shelf (bass) + high
+# shelf (treble) via CAPS Eq4p, written flat here. jukebox-pots rewrites the
+# gains live with the same helper (eq-write.py).
+write_spdif_eq_controls() {
+  python3 "$EQ_WRITE" "$1" "$TONE_BASS_FREQ" 0 "$TONE_SHELF_Q" \
+    "$TONE_TREBLE_FREQ" 0 "$TONE_SHELF_Q" "$EQ_CAPS_ID" >/dev/null
+}
+
+# Emit the S/PDIF branch's tone step. The 'equal' plugin only accepts float, so
+# a wrapper plug pins rate + FLOAT (like the analyser trim); without it the ALSA
+# 'multi' plugin fails to negotiate.
+render_spdif_eq() {
+  [ "$TONE_ENABLE" = "on" ] || return 0
+  cat <<EOF
+# S/PDIF tone: low shelf (bass) + high shelf (treble) via CAPS Eq4p; the
+# controls file is rewritten live by jukebox-pots.
+pcm.jukeboxSpdifEq {
+    type            plug
+    slave {
+        pcm         "jukeboxSpdifEqDsp"
+        rate        $SPDIF_RATE
+        format      FLOAT_LE
+    }
+}
+
+pcm.jukeboxSpdifEqDsp {
+    type            equal
+    slave.pcm       "jukeboxSpdif"
+    controls        "$SPDIF_EQ_CONTROLS_DEST"
+    library         "$EQ_LIBRARY"
+    module          "$EQ_MODULE"
+    channels        2
+}
+EOF
+}
+
+# What the S/PDIF software volume feeds: the tone step when enabled, else the
+# plain plug to the hardware.
+spdif_branch_sink() {
+  [ "$TONE_ENABLE" = "on" ] && echo jukeboxSpdifEq || echo jukeboxSpdif
+}
+
 # Emit the CamillaDSP config template for the tone control. The ALSA cdsp
 # plugin substitutes $samplerate$/$format$/$channels$ at open; jukebox-audio
 # fills the sink here. The tone step lives ONLY on the DAC branch: CamillaDSP
@@ -728,7 +785,7 @@ pcm.jukeboxSplit {
     slaves.a.channels 2
     slaves.b.pcm    "jukeboxEq"
     slaves.b.channels 2
-    slaves.c.pcm    "jukeboxSpdif"
+    slaves.c.pcm    "volumioSpdifVol"
     slaves.c.channels 2
     bindings.0.slave   a
     bindings.0.channel 0
@@ -750,6 +807,26 @@ pcm.volumioSoftVol {
     type            softvol
     slave {
         pcm         "$(tone_or_post)"
+    }
+    control {
+        name        "SoftMaster Playback Volume"
+        card        "$DAC_CARD"
+        device      0
+    }
+    max_dB $SOFTVOL_MAX_DB
+    min_dB $SOFTVOL_MIN_DB
+    resolution $SOFTVOL_RESOLUTION
+}
+
+# Third branch: the DAC's volume/balance (same SoftMaster control) plus its own
+# tone (CAPS Eq4p). Each output keeps its own processing: no ALSA 'multi' with
+# two clock domains and no second CamillaDSP (both make the chain unstable).
+$(render_spdif_eq)
+
+pcm.volumioSpdifVol {
+    type            softvol
+    slave {
+        pcm         "$(spdif_branch_sink)"
     }
     control {
         name        "SoftMaster Playback Volume"
@@ -1086,7 +1163,13 @@ JB_TONE_BASS_FREQ="$TONE_BASS_FREQ"
 JB_TONE_TREBLE_FREQ="$TONE_TREBLE_FREQ"
 JB_TONE_Q="$TONE_SHELF_Q"
 EOF
+  # install the S/PDIF tone helper (writes the Eq4p controls file) before use
+  [ -f "$SCRIPT_DIR/eq-write.py" ] && install -m 0755 "$SCRIPT_DIR/eq-write.py" "$EQ_WRITE"
   write_analyser_eq_controls "$EQ_CONTROLS_SRC" >/dev/null
+  if [ "$THIRD_OUTPUT" = "spdif" ]; then
+    write_spdif_eq_controls "$SPDIF_EQ_CONTROLS_SRC"
+    ok "S/PDIF tone: CAPS Eq4p low/high shelf (${TONE_BASS_FREQ} Hz / ${TONE_TREBLE_FREQ} Hz, Q ${TONE_SHELF_Q})"
+  fi
   ok "analyser bass trim: $ANALYSER_TRIM (${ANALYSER_FREQ_HZ} Hz ${ANALYSER_GAIN_DB} dB, Q ${ANALYSER_Q})"
   cat >"$APPLY_DIR/clean-controls.py" <<'PY'
 #!/usr/bin/env python3
@@ -1455,6 +1538,11 @@ install_live_files() {
   # open, so it must stay writable by non-root users too.
   install -d -m 0777 /var/lib/jukebox-audio
   install -m 0666 "$EQ_CONTROLS_SRC" "$EQ_CONTROLS_DEST"
+  # The S/PDIF eq file is rewritten live by jukebox-pots; never clobber an
+  # existing one (it would reset the tone to flat until the pots move again).
+  if [ "$THIRD_OUTPUT" = "spdif" ] && [ ! -f "$SPDIF_EQ_CONTROLS_DEST" ]; then
+    install -m 0666 "$SPDIF_EQ_CONTROLS_SRC" "$SPDIF_EQ_CONTROLS_DEST"
+  fi
   fix_active_perms
 }
 
@@ -1862,6 +1950,12 @@ cmd_apply() {
       install -m 0666 "$EQ_CONTROLS_SRC" "$EQ_CONTROLS_DEST"
       log "apply: refreshed analyser controls file"
     fi
+  fi
+  if [ "$THIRD_OUTPUT" = "spdif" ] && [ "$TONE_ENABLE" = "on" ] && [ -f "$SPDIF_EQ_CONTROLS_SRC" ]; then
+    ensure_dsp_deps
+    install -d -m 0777 /var/lib/jukebox-audio
+    # create only: jukebox-pots owns the live gains in this file
+    [ -f "$SPDIF_EQ_CONTROLS_DEST" ] || install -m 0666 "$SPDIF_EQ_CONTROLS_SRC" "$SPDIF_EQ_CONTROLS_DEST"
   fi
   fix_active_perms
   if [ "$SECOND_OUTPUT" = "hdmi" ] && [ "$BOOT_APPLY" = 1 ]; then
