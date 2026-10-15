@@ -56,7 +56,9 @@ DUAL_OUTPUT_ARGS=(
   --third-output spdif
   --spdif-card-match "DSD TECH"
   --spdif-rate 48000
-  --spdif-gain 0.5
+  # Full-level clean S/PDIF copy (0 dB). 0.5 was -6 dB and sounded too low;
+  # the DAC branch already runs at unity, so the S/PDIF should too.
+  --spdif-gain 1.0
 )
 
 HOST="${JUKEBOX_HOST:-}"
