@@ -3,8 +3,9 @@
 Two 3.5" SATA hard drives in USB enclosures, mirrored (**RAID 1**) and mounted
 where Volumio expects removable storage, so the music library lives on the
 disks instead of the SD card. This directory is **not a package** (no
-`deploy.sh` / `install.sh`): it is the on-host script plus this doc. Run it by
-hand over SSH.
+`deploy.sh` / `install.sh`): it is the on-host script plus this doc. Run it on
+the host by hand, or from a development machine with the top-level wrapper
+`./deploy-raid.sh` (the storage half of the box, next to `./deploy-all.sh`).
 
 ## What it does
 

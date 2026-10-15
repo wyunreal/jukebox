@@ -7,6 +7,9 @@
 # don't have to run six commands by hand. It runs from a development machine and
 # drives the Pi over SSH.
 #
+# This is the SOFTWARE half of the box. The other half — the RAID 1 music
+# library — is mounted by the sibling ./deploy-raid.sh.
+#
 # Usage:
 #   ./deploy-all.sh [options] [command]
 #

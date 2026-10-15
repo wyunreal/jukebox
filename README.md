@@ -87,7 +87,10 @@ automatic DAC-only fallback when the second device is absent. That analyser
 branch has no ALSA volume; a 3-position switch instead picks the analyser card's
 own hardware level (normal / lower / off). The DAC branch also carries a live
 **bass/treble tone control** (CamillaDSP), driven by two of the Arduino's
-potentiometers — see [Installing from scratch](#installing-from-scratch).
+potentiometers. There is an optional **third output** — a USB **S/PDIF** feed
+for an external DAC/receiver — that carries the DAC's volume/balance plus its
+own bass/treble (an ALSA `equal`/CAPS Eq4p), all at the **source sample rate**;
+see [Installing from scratch](#installing-from-scratch).
 
 ## Physical controls
 
@@ -135,7 +138,8 @@ No STL/STEP exports are committed yet — export from FreeCAD as needed.
 ## Audio software
 
 Custom multi-output audio (I2S DAC + constant-level second output for the
-spectrum analyser) with a live bass/treble tone control, for **Volumio**.
+spectrum analyser, plus an optional processed **S/PDIF** third output) with a
+live bass/treble tone control, for **Volumio**.
 Step-by-step, from scratch: see
 [Installing from scratch](#installing-from-scratch).
 
@@ -296,6 +300,16 @@ There is also a top-level wrapper that drives all six packages in that order:
 ./deploy-all.sh -H user@host uninstall   # remove every package (reverse order)
 ```
 
+The box is **two halves**, each with its own top-level installer in the repo root:
+`deploy-all.sh` (the software above) and `deploy-raid.sh` (the RAID 1 music
+library — not part of `deploy-all`). Mount the storage with the sibling:
+
+```sh
+./deploy-raid.sh -H user@host install                       # create/adopt + mount
+./deploy-raid.sh -H user@host install --disk-a /dev/sda --disk-b /dev/sdb
+./deploy-raid.sh -H user@host status                        # array/mount/disks/SMART
+```
+
 The host is **required**: pass `-H/--host user@host` or set `JUKEBOX_HOST`
 (there is no built-in default). Use `-p <password>` (or `$JUKEBOX_PASSWORD`) when
 `sudo` on the box needs one:
@@ -326,13 +340,16 @@ software/jukebox-keyboard/deploy.sh     -H volumio@<host> -p <pass> install --ke
 1. Flash Volumio and finish its first-run wizard (network, audio output).
    Note the host and the `volumio` user's password.
 
-2. Install the multi-output + tone (DAC branch + constant-level USB analyser;
-   the tone engine CamillaDSP and the patched `cdsp` plugin are shipped by this
-   repo):
+2. Install the multi-output + tone (DAC branch + constant-level USB analyser,
+   plus the optional USB S/PDIF third branch; the tone engine CamillaDSP + the
+   patched `cdsp` plugin, and the alsaequal `equal` + CAPS Eq4p used by the
+   S/PDIF tone, are shipped/installed by this repo):
 
    ```sh
    cd software/volumio/multi-output
-   ./deploy.sh --host volumio@<host> install --second-output usb
+   ./deploy.sh --host volumio@<host> install --second-output usb \
+        --usb-card-match "USB PnP" \
+        --third-output spdif --spdif-card-match "DSD TECH" --spdif-gain 1.0
    ```
 
    Add `--with-playback` to also run the playback check. On a Volumio box the
@@ -400,7 +417,8 @@ If `sudo` on the box needs a password, add `-p <password>` or export
 
 | Package | What it installs |
 |---|---|
-| `software/volumio/multi-output` | ALSA split + CamillaDSP tone step + guards + MPD buffers for Volumio |
+| `software/volumio/multi-output` | ALSA split (DAC + USB analyser + optional USB S/PDIF) + CamillaDSP tone on the DAC + Eq4p tone on the S/PDIF + guards + MPD buffers for Volumio |
+| `software/storage` *(not a package)* | the RAID 1 music library, mounted by the sibling `./deploy-raid.sh` (`raid-music.sh`) |
 | `software/volumio/pot-overlay` | On-screen balance/bass/treble indicator (overlay server + injected UI loader) |
 | `software/volumio/ui-nav` | UI navigation channel (a daemon can switch the screen; used by the open/close key) |
 | `software/jukebox-pots` | `jukebox-pots.service` (volume/balance/tone from the Arduino; power button halts the Pi, on by default) |

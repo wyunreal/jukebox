@@ -10,8 +10,10 @@ What you get:
 | --- | --- | --- |
 | I2S DAC (speakers) | controlled by the normal Volumio volume slider / API / MPD | **bass + treble** (CamillaDSP) |
 | Second output (spectrum analyser) | constant level; not affected by volume | none (stays untouched) |
+| Optional third (USB S/PDIF) | same as the I2S DAC (shares its volume/balance) | **bass + treble** (ALSA `equal`/CAPS Eq4p) |
 
-Both outputs always play the same stream, simultaneously.
+All outputs play the same stream simultaneously (the S/PDIF follows the source
+rate).
 
 ## Tone control (bass / treble)
 
@@ -29,8 +31,8 @@ volumio -> softvolume -> jukeboxRoute -> jukeboxSplit (multi)
 * Both shelves default to **0.0 dB**, which is bit-for-bit transparent.
 * `jukebox-pots` rewrites the two gains in the CamillaDSP config and sends it
   a `SIGHUP`, so the tone changes **live**, without stopping playback.
-* The tone applies to the **DAC branch only**; the analyser feed is not
-  affected by the tone (by design).
+* The tone applies to the **DAC branch** (and, with the optional third output,
+  to the S/PDIF); the analyser feed is not affected by the tone (by design).
 * CamillaDSP runs at the file's native rate (the `cdsp` plugin substitutes
   `$samplerate$`/`$format$`/`$channels$` on every open), so hi-res files are
   not resampled.
@@ -409,8 +411,9 @@ canonical copy under `/usr/local/jukebox-*/`.
   copy (install/verify opens the chain as root) can never block `mpd`; the
   installer/guard also re-asserts `0666` with `fix_active_perms`. The tone
   templates under `/usr/local/jukebox-audio/cdsp/` are `0644`.
-* **Analysers:** the tone acts on the DAC branch only. The spectrum analyser
-  feed keeps the fixed-level signal (and its own bass trim).
+* **Analysers:** the tone acts on the DAC (and, with the third output, the
+  S/PDIF). The spectrum analyser feed keeps the fixed-level signal (and its own
+  bass trim).
 * **HDMI caveat:** on this Pi, activating an HDMI output can take over the
   DRM/KMS display configuration and stop the DSI touch screen
   (`touch_display` plugin). Use `--second-output usb` if you need the touch

@@ -58,9 +58,11 @@ The pots are not hard-wired to a function: `JP_TONE_BASS_POT` and
 `JP_TONE_TREBLE_POT` pick which firmware lines drive bass and treble
 (`single` / `multisecond` by default).
 
-The volume, balance and tone all live on the **DAC branch only**, exactly as
-before. The spectrum analyser's level is changed on the analyser card's own
-hardware control (its `PCM` playback volume + mute) — see
+The volume, balance and tone live on the **DAC branch**, and — when the optional
+USB S/PDIF third output is installed — the S/PDIF branch gets the same
+volume/balance (a second `softvol` reading the same `SoftMaster`) plus its own
+tone. The spectrum analyser is different: its level is changed on the analyser
+card's own hardware control (its `PCM` playback volume + mute) — see
 [Spectrum level switch](#spectrum-level-switch) — so the ALSA split is never
 rewritten and the analyser branch itself still has no volume control.
 
@@ -70,7 +72,7 @@ rewritten and the analyser branch itself still has no volume control.
 PowerAndPotsArduino --USB serial--> jukebox-pots daemon
                                       | volume  -> player volume (DAC branch)
                                       | balance -> DAC pan (per-channel)
-                                      | tone    -> CamillaDSP config + SIGHUP (live)
+                                      | tone    -> CamillaDSP (DAC) + Eq4p file (S/PDIF), live
                                       | switch  -> analyser card PCM volume/mute
                                       | direct  -> DAC bypass (bit-perfect)
                                       '- direct  -> ignore the pots while on
@@ -82,9 +84,9 @@ The volume path, balance and tone are those of the **Volumio** chain:
 | --- | --- |
 | Volume | Volumio API (`/api/v1/commands/?cmd=volume`) -> `SoftMaster` |
 | Balance | two channels of `SoftMaster Playback Volume` |
-| Tone | shelves in `/usr/local/jukebox-audio/cdsp/camilla.*.yml` |
+| Tone | DAC: shelves in `/usr/local/jukebox-audio/cdsp/camilla.*.yml` (`SIGHUP`); S/PDIF: `spdif-eq.bin` (CAPS Eq4p) |
 | Spectrum | the analyser USB card's own `PCM` playback control |
-| Pure direct | `SoftMaster` at max + CamillaDSP shelves at 0 dB (bit-perfect) |
+| Pure direct | `SoftMaster` at max + both tone stages at 0 dB (bit-perfect) |
 
 * **Volume** goes through Volumio's own volume path, so the UI/API stay in
   sync, and is the product of the volume pot (ceiling) and the aux pot
@@ -92,16 +94,20 @@ The volume path, balance and tone are those of the **Volumio** chain:
   directly instead.
 * **Balance** attenuates the channel opposite to the pan, keeping the other at
   its current level via the left/right values of `SoftMaster`.
-* **Bass/treble** rewrite the two shelf `gain:` values in the CamillaDSP
-  config and send the running process a `SIGHUP`; it re-reads the config and
-  rebuilds the filters **without interrupting playback**. The rewrite finds
-  the shelves by their biquad type (`Lowshelf`/`Highshelf`) and preserves the
-  file's mode/owner so MPD's `cdsp` plugin can keep rewriting it.
+* **Bass/treble** are applied to both outputs. On the **DAC**: the two shelf
+  `gain:` values in the CamillaDSP config are rewritten and the running process
+  gets a `SIGHUP` — it rebuilds the filters **without interrupting playback**.
+  On the **S/PDIF** (when installed): the Eq4p controls file (`spdif-eq.bin`,
+  written via `eq-write.py`) is rewritten and the ALSA `equal` plugin reads it
+  live (no reload). The CamillaDSP rewrite finds the shelves by their biquad
+  type (`Lowshelf`/`Highshelf`) and preserves the file's mode/owner so MPD's
+  `cdsp` plugin can keep rewriting it.
 * **Spectrum** sets the analyser USB card's own `PCM` playback volume (and
   mute), found by long name so it survives the dynamic card index; the ALSA
   split is never rewritten. See [Spectrum level switch](#spectrum-level-switch).
 * **Pure direct** (the ON/OFF switch) pins `SoftMaster` to its maximum, both
-  channels equal, and drives the CamillaDSP shelves to 0 dB, ignoring the pots;
+  channels equal, and drives both tone stages to 0 dB (the DAC's CamillaDSP
+  shelves and the S/PDIF's Eq4p), ignoring the pots;
   see [Pure direct switch](#pure-direct-switch).
 * The daemon has **no third-party dependencies** (no `pyserial`); it opens the
   serial port with `termios` and re-scans for it when missing, so it survives
@@ -164,18 +170,21 @@ sudo /usr/local/jukebox-pots/jukebox-pots.py --spectrum 2   # 1 normal, 2 attenu
 
 The ON/OFF switch makes the I2S DAC branch play **pure direct**: the volume,
 balance and tone processing are bypassed so the DAC receives an untouched
-stream, and the volume/aux/balance/tone pots are ignored while it is on.
+stream, and the volume/aux/balance/tone pots are ignored while it is on. The
+S/PDIF output (when installed) is driven the same way, so it is full-level and
+flat too.
 
 | Switch | Effect on the DAC (speakers) |
 | --- | --- |
 | `OFF` | normal: the pots drive volume, balance, bass and treble |
-| `ON` | pure direct: `SoftMaster` at its maximum, both channels equal, CamillaDSP shelves at 0 dB |
+| `ON` | pure direct: `SoftMaster` at its maximum, both channels equal, both tone stages at 0 dB |
 
 With the switch ON the DAC runs at full scale, so **the speakers play at full
 volume** — use an external volume control if you need one. The tone is bypassed
-by driving the CamillaDSP shelves to 0 dB, which is bit-for-bit transparent
-(verified byte-for-byte: a flat/empty CamillaDSP pipeline reproduces the input
-exactly). The spectrum switch and feed are unaffected.
+by driving both tone stages to 0 dB (the DAC's CamillaDSP shelves and the
+S/PDIF's Eq4p), which is bit-for-bit transparent (verified byte-for-byte: a
+flat/empty CamillaDSP pipeline reproduces the input exactly). The spectrum
+switch and feed are unaffected.
 
 Which firmware line carries the switch is chosen with `--direct-source`
 (`push`/`power`, default `push`); turn the whole feature off with `--no-direct`.
