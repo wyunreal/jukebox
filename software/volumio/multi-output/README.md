@@ -114,7 +114,8 @@ This produces the `usbspdif` variant: `jukeboxRoute` fans out to 6 channels
   (`/var/lib/jukebox-audio/spdif-eq.bin`) **live** when the tone pots move.
 * **Pure direct** (SoftMaster at max, both tone stages at 0 dB) leaves the DAC
   and the S/PDIF at full level and flat.
-* The S/PDIF leg is rate-pinned to `--spdif-rate` (default 48000).
+* The S/PDIF follows the **source sample rate** (no rate pin), like the DAC —
+  `--spdif-rate` is only the rate used by the card reachability check.
 * Why not simply fan a single CamillaDSP out to both outputs? The ALSA `multi`
   plugin writes two devices in lockstep; with independent clocks (the Pi's I2S
   clock vs the USB card's crystal) one leg's buffer stops draining and

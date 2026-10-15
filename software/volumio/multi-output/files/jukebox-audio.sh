@@ -139,6 +139,8 @@ USB_CARD_MATCH="${JB_USB_CARD_MATCH:-}"
 THIRD_OUTPUT="${JB_THIRD_OUTPUT:-none}"     # none | spdif
 SPDIF_CARD="${JB_SPDIF_CARD:-}"
 SPDIF_CARD_MATCH="${JB_SPDIF_CARD_MATCH:-}"
+# Probe rate only: S/PDIF playback follows the source rate (no pin), like the
+# DAC; this value is just the rate used by the card reachability check.
 SPDIF_RATE="${JB_SPDIF_RATE:-48000}"
 # Linear gain (0..1] applied to the S/PDIF branch only, to trim a hot output
 # (e.g. a saturating analogue stage or a coax receiver with little headroom).
@@ -564,12 +566,12 @@ render_spdif_eq() {
   [ "$TONE_ENABLE" = "on" ] || return 0
   cat <<EOF
 # S/PDIF tone: low shelf (bass) + high shelf (treble) via CAPS Eq4p; the
-# controls file is rewritten live by jukebox-pots.
+# controls file is rewritten live by jukebox-pots. No rate pin: the source
+# rate flows through (Eq4p recalcs per rate), exactly like the DAC.
 pcm.jukeboxSpdifEq {
     type            plug
     slave {
         pcm         "jukeboxSpdifEqDsp"
-        rate        $SPDIF_RATE
         format      FLOAT_LE
     }
 }
@@ -848,12 +850,12 @@ pcm.jukeboxUsb {
     }
 }
 
-# Third branch: pure digital S/PDIF feed (no volume, no EQ).
+# S/PDIF output: the source rate flows through (no rate pin), and no volume or
+# tone here (the software volume and the Eq4p tone stage sit earlier).
 pcm.jukeboxSpdif {
     type            plug
     slave {
         pcm         "hw:CARD=$SPDIF_CARD,DEV=0"
-        rate        $SPDIF_RATE
 ${SPDIF_FORMAT:+        format      $SPDIF_FORMAT}
     }
 }
@@ -1817,7 +1819,7 @@ cmd_install() {
     fi
     if [ "$THIRD_OUTPUT" = "spdif" ]; then
       echo "    Third output  : spdif"
-      echo "    S/PDIF card   : ${SPDIF_CARD:-<not connected>}  (rate $SPDIF_RATE)"
+      echo "    S/PDIF card   : ${SPDIF_CARD:-<not connected>}  (follows source rate)"
       [ -n "$SPDIF_CARD_MATCH" ] && echo "    S/PDIF match  : \"$SPDIF_CARD_MATCH\" (long name)"
       [ -n "$SPDIF_CARD" ] && echo "    S/PDIF card is: $(usb_card_long_name "$SPDIF_CARD")"
     fi

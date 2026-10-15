@@ -159,8 +159,9 @@ output: reinstall with `--third-output none`.
 band a = low shelf (bass), band d = high shelf (treble). `jukebox-pots`
 rewrites its Eq4p controls file `/var/lib/jukebox-audio/spdif-eq.bin` **live**
 (via `/usr/local/jukebox-audio/eq-write.py`) when the tone pots move; the
-`equal` plugin reads it without reopening the device. `--spdif-rate` pins the
-S/PDIF leg (default 48000) and `--spdif-gain` trims it. Pure direct forces
+`equal` plugin reads it without reopening the device. The S/PDIF follows the
+**source sample rate** (no rate pin, like the DAC); `--spdif-rate` is only the
+card reachability-check rate, and `--spdif-gain` trims the leg. Pure direct forces
 SoftMaster to max and both tone stages to 0 dB. The tone is a separate stage
 from the DAC's CamillaDSP, so the two curves are close but not bit-identical.
 
