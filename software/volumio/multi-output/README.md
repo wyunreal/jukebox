@@ -171,7 +171,8 @@ The installer:
 5. points Volumio's volume settings at the DAC's `SoftMaster`,
 6. disables MPD's own mixer and adds buffer settings so MPD opens the split
    chain reliably,
-7. installs systemd units (boot guard + path watcher) and a udev rule that
+7. installs systemd units (boot guard + path watcher, plus an `mpd.service`
+   override that waits for a complete `/etc/mpd.conf`) and a udev rule that
    re-assert the configuration if Volumio rewrites it or the second device
    is plugged/unplugged,
 8. keeps only the DAC branch active whenever the second device is missing.
@@ -374,6 +375,33 @@ tail -n 50 /var/log/jukebox-audio.log   # apply leaves a trace here
 The other packages repeat the same pattern (`jukebox-ui-guard`,
 `jukebox-overlay-guard`, the `ui-nav` guard), each restoring from its own
 canonical copy under `/usr/local/jukebox-*/`.
+
+### The MPD boot-race guard
+
+Volumio generates `/etc/mpd.conf` **asynchronously**: its `createMPDFile()`
+invokes its callback *before* `fs.writeFile()` has finished, and the caller then
+runs `restartMpd()`. At boot MPD can therefore start and read a truncated/empty
+file — no `audio_output`, no `db_file` — and comes up **silent with an empty
+library** until a manual `systemctl restart mpd`.
+
+`install` adds a systemd override so MPD waits for a complete file:
+
+| Piece | Installed at | Role |
+| --- | --- | --- |
+| `wait-mpd-conf.sh` | `/usr/local/jukebox-audio/` | waits for a complete, settled `/etc/mpd.conf` |
+| `mpd.service.d/jukebox-mpd-conf.conf` | `/etc/systemd/system/` | `ExecStartPre=-…/wait-mpd-conf.sh` |
+
+The helper polls (max 15 s, best-effort, **always exits 0**) until the file is
+non-empty, contains `audio_output` and has stopped changing, so MPD only ever
+reads a finished file. `verify` reports it as *"MPD waits for a complete
+/etc/mpd.conf at startup"*.
+
+> **Do not restart MPD from outside to "fix" the config.** Volumio's bundled MPD
+> client does not reconnect on a clean socket close, and its `sendCommand()` then
+> wedges on `assert.ok(self.idling)` — `browse`/`play` hang (`MPD error: The
+> expression evaluated to a falsy value`). That is why the fix is an
+> `ExecStartPre` delay, not an external restart. If Volumio ever wedges this way,
+> `systemctl restart volumio` brings it back.
 
 ## Notes and caveats
 

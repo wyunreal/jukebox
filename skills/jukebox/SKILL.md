@@ -104,6 +104,7 @@ software/jukebox-keyboard/deploy.sh -H volumio@<host> install --key-action next 
 | USB pins | `sudo /usr/local/jukebox-audio/jukebox-audio.sh status` | `usb card: present (Device_1 … USB PnP Sound Device)`; with 3rd branch also `spdif card: present (Device … DSD TECH…)` |
 | All branches up | `mpc play; sleep 5` then `/proc/asound/card*/pcm0p/sub0/status` | `sndrpirpidac` RUNNING and each USB card RUNNING |
 | Guard units | `systemctl is-enabled jukebox-audio-guard.service jukebox-audio-guard.path` | both `enabled` |
+| MPD boot-race guard | `ls /etc/systemd/system/mpd.service.d/jukebox-mpd-conf.conf` | present (`ExecStartPre` waits for a complete `/etc/mpd.conf`) |
 | Pot service | `systemctl is-active jukebox-pots` | `active` (if installed) |
 | Keyboard service | `systemctl is-active jukebox-keyboard` | `active` (if installed) |
 | Pot port | `ls /dev/ttyACM*` | the PowerAndPots/Keyboard Arduino (if plugged) |
@@ -311,6 +312,16 @@ states above.
 - **`mpc volume` doesn't work on purpose** (MPD mixer disabled). Don't
   "repair" that by re-enabling MPD's mixer — it would let MPD touch the jack /
   second output control.
+- **Never restart MPD from outside while Volumio is connected.** Volumio
+  rewrites `/etc/mpd.conf` asynchronously and restarts MPD *before* the write
+  finishes, so at boot MPD can read a truncated file (no `audio_output`, no
+  `db_file`) and comes up silent with an empty library. The fix is an
+  `mpd.service` `ExecStartPre` (`wait-mpd-conf.sh`) that waits for a complete
+  file — **not** an external `systemctl restart mpd`. Volumio's bundled MPD
+  client does not reconnect on a clean socket close and then wedges on
+  `assert.ok(self.idling)` (`MPD error: The expression evaluated to a falsy
+  value`), leaving `browse`/`play` hung. If the UI ever wedges like that,
+  `systemctl restart volumio` brings it back.
 - **Re-installing is safe**: `install` is idempotent and takes a fresh backup.
   It's the go-to fix if the audio config gets mangled. The `multi` split is
   all-or-nothing: if one branch can't open, everything is silent — the
@@ -344,6 +355,8 @@ states above.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | No sound at all | chain broken, or second device vanished mid-session | `status`; if variant `daconly`, replug USB; then `apply` |
+| No sound + empty library after boot; `journalctl -u mpd` shows `No 'audio_output' defined in config file` / `exception: No database` | Volumio restarted MPD before it finished writing `/etc/mpd.conf` (boot race) | fixed by the MPD drop-in (`ExecStartPre` waits for a complete file, `v1.2.6+`); if seen, `systemctl restart mpd` (then `systemctl restart volumio` if the UI hangs) |
+| UI stuck / can't browse or add music (all sources hang) | Volumio's MPD client wedged (e.g. MPD restarted while it was connected): `MPD error: The expression evaluated to a falsy value` | `systemctl restart volumio`; never restart MPD from outside on a running Volumio |
 | No sound after plugging a new USB card | kernel renamed the cards; the branch points at the new one | `sudo jukebox-audio.sh status`; reinstall pinning both: `--usb-card-match "USB PnP"` (+ `--spdif-card-match "DSD TECH"` if used) |
 | Speakers fine, no analyser feed | USB card absent or variant `daconly` | replug, wait ~10 s (udev), else `install --second-output usb` |
 | Analyser works but no S/PDIF | third branch off, or S/PDIF card absent/mismatched | `status` shows `third output: spdif` + `spdif card`; reinstall with `--third-output spdif --spdif-card-match "..."` |
