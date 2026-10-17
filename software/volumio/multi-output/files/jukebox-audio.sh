@@ -78,7 +78,7 @@
 #
 set -euo pipefail
 
-VERSION="1.2.5"
+VERSION="1.2.6"
 
 APPLY_DIR="/usr/local/jukebox-audio"
 CONFIG_ENV="$APPLY_DIR/config.env"
@@ -91,6 +91,11 @@ BACKUP_ROOT="/var/backups/jukebox-audio"
 RESTART_STAMP="/run/jukebox-audio-volumio-restart"
 VOLUMIO_RESTART_MIN_INTERVAL=300
 UDEV_RULE="/etc/udev/rules.d/89-jukebox-audio.rules"
+# Volumio restarts MPD before it has finished writing /etc/mpd.conf; the drop-in
+# makes MPD's ExecStartPre wait for a complete file (see wait-mpd-conf.sh).
+MPD_DROPIN_DIR="/etc/systemd/system/mpd.service.d"
+MPD_DROPIN="$MPD_DROPIN_DIR/jukebox-mpd-conf.conf"
+WAIT_MPD_CONF="$APPLY_DIR/wait-mpd-conf.sh"
 # alsaequal + CAPS LADSPA plugin power the analyser low-shelf filter.
 EQ_CONTROLS_SRC="$APPLY_DIR/analyser-eq.bin"
 EQ_CONTROLS_DEST="/var/lib/jukebox-audio/analyser-eq.bin"
@@ -1167,6 +1172,8 @@ JB_TONE_Q="$TONE_SHELF_Q"
 EOF
   # install the S/PDIF tone helper (writes the Eq4p controls file) before use
   [ -f "$SCRIPT_DIR/eq-write.py" ] && install -m 0755 "$SCRIPT_DIR/eq-write.py" "$EQ_WRITE"
+  # install the MPD boot-race helper (used by the mpd.service ExecStartPre)
+  [ -f "$SCRIPT_DIR/wait-mpd-conf.sh" ] && install -m 0755 "$SCRIPT_DIR/wait-mpd-conf.sh" "$WAIT_MPD_CONF"
   write_analyser_eq_controls "$EQ_CONTROLS_SRC" >/dev/null
   if [ "$THIRD_OUTPUT" = "spdif" ]; then
     write_spdif_eq_controls "$SPDIF_EQ_CONTROLS_SRC"
@@ -1655,12 +1662,24 @@ ACTION=="change", SUBSYSTEM=="drm", KERNEL=="card*-HDMI-A-*", RUN+="/usr/bin/sys
 ACTION=="add|remove", SUBSYSTEM=="sound", KERNEL=="card*", RUN+="/usr/bin/systemctl --no-block restart jukebox-audio-guard.service"
 EOF
   fi
+  # MPD reads /etc/mpd.conf only at startup and Volumio can restart it mid-write
+  # (see wait-mpd-conf.sh). Make MPD wait for a complete file first.
+  install -d "$MPD_DROPIN_DIR"
+  if [ -f "$SCRIPT_DIR/mpd-service-dropin.conf" ]; then
+    install -m 0644 "$SCRIPT_DIR/mpd-service-dropin.conf" "$MPD_DROPIN"
+  else
+    cat >"$MPD_DROPIN" <<EOF
+[Service]
+ExecStartPre=-$WAIT_MPD_CONF
+EOF
+  fi
   systemctl daemon-reload
   systemctl enable jukebox-audio-guard.service >/dev/null 2>&1 || true
   systemctl enable jukebox-audio-guard.path >/dev/null 2>&1 || true
   systemctl start jukebox-audio-guard.path >/dev/null 2>&1 || true
   udevadm control --reload-rules >/dev/null 2>&1 || true
   ok "guard units + udev rule installed"
+  ok "MPD drop-in installed (waits for a complete /etc/mpd.conf)"
 }
 
 remove_units() {
@@ -1668,6 +1687,8 @@ remove_units() {
   systemctl disable --now jukebox-audio-guard.service >/dev/null 2>&1 || true
   rm -f /etc/systemd/system/jukebox-audio-guard.path /etc/systemd/system/jukebox-audio-guard.service
   rm -f "$UDEV_RULE"
+  rm -f "$MPD_DROPIN"
+  rmdir "$MPD_DROPIN_DIR" 2>/dev/null || true
   systemctl daemon-reload
   udevadm control --reload-rules >/dev/null 2>&1 || true
 }
@@ -2045,6 +2066,14 @@ cmd_verify() {
     ok "MPD buffer settings for the split chain present"
   else
     warn "MPD buffer_time/period_time missing (MPD may fail to open the split chain)"
+  fi
+
+  # Volumio can restart MPD mid-write of /etc/mpd.conf; the drop-in makes MPD
+  # wait for a complete file first (see wait-mpd-conf.sh).
+  if [ -f "$MPD_DROPIN" ] && [ -x "$WAIT_MPD_CONF" ]; then
+    ok "MPD waits for a complete /etc/mpd.conf at startup (boot-race guard)"
+  else
+    warn "MPD boot-race guard not installed ($MPD_DROPIN / $WAIT_MPD_CONF)"
   fi
 
   if python3 - "$ALSA_CONFIG_JSON" "$DAC_CARD" <<'PY' >/dev/null 2>&1
